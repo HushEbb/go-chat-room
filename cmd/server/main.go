@@ -12,7 +12,7 @@ import (
 func main() {
 	// 初始化数据库连接
 	// TODO: 应从配置文件中读取
-    dsn := "user:password@tcp(127.0.0.1:3306)/chatroom?charset=utf8mb4&parseTime=True&loc=Local"
+    dsn := "root:password@tcp(127.0.0.1:3306)/chatroom?charset=utf8mb4&parseTime=True&loc=Local"
 	if err := db.InitDB(dsn); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
