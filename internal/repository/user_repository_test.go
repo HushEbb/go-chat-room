@@ -2,15 +2,19 @@ package repository
 
 import (
 	"go-chat-room/internal/model"
+	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"testing"
 	"time"
 )
 
 func setupTestDB(t *testing.T) {
+	if err := config.InitTest(); err != nil {
+		t.Fatalf("Failed to initialize config: %v", err)
+	}
+
 	// 配置测试数据库连接
-	dsn := "root:password@tcp(127.0.0.1:3306)/chatroom_test?charset=utf8mb4&parseTime=True&loc=Local"
-	if err := db.InitDB(dsn); err != nil {
+	if err := db.InitDB(); err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"go-chat-room/internal/api"
 	"go-chat-room/internal/middleware"
+	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"log"
 
@@ -10,10 +11,13 @@ import (
 )
 
 func main() {
+	// 初始化配置
+	if err := config.Init(); err != nil {
+		log.Fatalf("Failed to load config: %v", err)
+	}
+
 	// 初始化数据库连接
-	// TODO: 应从配置文件中读取
-    dsn := "root:password@tcp(127.0.0.1:3306)/chatroom?charset=utf8mb4&parseTime=True&loc=Local"
-	if err := db.InitDB(dsn); err != nil {
+	if err := db.InitDB(); err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
 

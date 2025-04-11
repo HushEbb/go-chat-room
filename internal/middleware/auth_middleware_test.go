@@ -3,6 +3,7 @@ package middleware
 import (
 	"go-chat-room/internal/model"
 	"go-chat-room/internal/repository"
+	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"go-chat-room/pkg/utils"
 	"net/http"
@@ -14,8 +15,11 @@ import (
 )
 
 func setupTestDB(t *testing.T) {
-	dsn := "root:password@tcp(127.0.0.1:3306)/chatroom_test?charset=utf8mb4&parseTime=True&loc=Local"
-	if err := db.InitDB(dsn); err != nil {
+	if err := config.InitTest(); err != nil {
+		t.Fatalf("Failed to initialize config: %v", err)
+	}
+
+	if err := db.InitDB(); err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
 }

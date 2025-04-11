@@ -3,13 +3,14 @@ package utils
 import (
 	"errors"
 	"fmt"
+	"go-chat-room/pkg/config"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
 
 // 定义JWT密钥
-var jwtSecret = []byte("your-secret-key") // TODO: 从配置文件读取
+var jwtSecret = []byte(config.GlobalConfig.JWT.Secret)
 
 // 自定义JWT声明结构
 type Claims struct {
@@ -22,8 +23,8 @@ func GenerateToken(userID uint) (string, error) {
 	claims := Claims{
 		UserID: userID,
 		RegisteredClaims: jwt.RegisteredClaims{
-			// 过期时间：1天
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+			// 过期时间
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(config.GlobalConfig.JWT.Expiration)),
 			// 签发时间
 			IssuedAt: jwt.NewNumericDate(time.Now()),
 			// 生效时间

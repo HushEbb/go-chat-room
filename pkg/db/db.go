@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"go-chat-room/internal/model"
+	"go-chat-room/pkg/config"
 	"log"
 
 	"gorm.io/driver/mysql"
@@ -12,9 +13,9 @@ import (
 var DB *gorm.DB
 
 // 初始化数据库连接
-func InitDB(dsn string) error {
+func InitDB() error {
 	var err error
-	DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	DB, err = gorm.Open(mysql.Open(config.GlobalConfig.Database.DSN), &gorm.Config{})
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
