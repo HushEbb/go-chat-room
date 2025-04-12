@@ -2,7 +2,6 @@ package websocket
 
 import (
 	"encoding/json"
-	"errors"
 	"go-chat-room/internal/model"
 	"log"
 )
@@ -16,9 +15,9 @@ type Hub struct {
 
 func NewHub() *Hub {
 	return &Hub{
-		clients: make(map[uint]*Client),
-		broadcast: make(chan *model.Message),
-		register: make(chan *Client),
+		clients:    make(map[uint]*Client),
+		broadcast:  make(chan *model.Message),
+		register:   make(chan *Client),
 		unregister: make(chan *Client),
 	}
 }
@@ -32,18 +31,21 @@ func (h *Hub) Unregister(client *Client) {
 }
 
 func (h *Hub) HandleMessage(message []byte, senderID uint) {
-	h.broadcast <- &model.Message{
-		Content: string(message),
-		SenderID: senderID,
+	var msg struct {
+		Content    string `json:"content"`
+		ReceiverID uint   `json:"receiver_id"`
 	}
-}
 
-func (h *Hub) BroadcastMessage(message []byte, receiverID uint) error {
-	if client, ok := h.clients[receiverID]; ok {
-		client.Send <- message
-		return nil
+	if err := json.Unmarshal(message, &msg); err != nil {
+		log.Printf("Failed to unmarshal message: %v", err)
+		return
 	}
-	return errors.New("receiver not found")
+
+	h.broadcast <- &model.Message{
+		Content:    msg.Content,
+		SenderID:   senderID,
+		ReceiverID: msg.ReceiverID,
+	}
 }
 
 func (h *Hub) Run() {
