@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"log"
 	"sync"
 	"time"
 
@@ -50,7 +51,9 @@ func (c *Client) ReadPump() {
 		_, message, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				// TODO: 记录错误日志
+				log.Printf("error: unexpected close error for user %d: %v", c.UserID, err)
+			} else {
+				log.Printf("error: read error for user %d: %v", c.UserID, err)
 			}
 			break
 		}
@@ -80,6 +83,7 @@ func (c *Client) WritePump() {
 			w, err := c.Conn.NextWriter(websocket.TextMessage)
 			if err != nil {
 				c.mu.Unlock()
+				log.Printf("error: failed to get next writer for user %d: %v", c.UserID, err)
 				return
 			}
 
@@ -93,13 +97,19 @@ func (c *Client) WritePump() {
 
 			if err := w.Close(); err != nil {
 				c.mu.Unlock()
+				log.Printf("error: failed to close writer for user %d: %v", c.UserID, err)
 				return
 			}
 			c.mu.Unlock()
 
 		case <-ticker.C:
+			c.mu.Lock()
+			log.Printf("Sending ping from server")
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.Conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			err := c.Conn.WriteMessage(websocket.PingMessage, nil)
+			c.mu.Unlock()
+			if err != nil {
+				log.Printf("Failed to send ping: %v", err)
 				return
 			}
 		}
