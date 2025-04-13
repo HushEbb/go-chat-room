@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"gorm.io/gorm"
 )
 
 func setupTestMessages(t *testing.T) (*MessageRepository, *UserRepository, *model.User, *model.User) {
@@ -18,6 +19,9 @@ func setupTestMessages(t *testing.T) (*MessageRepository, *UserRepository, *mode
 	if err := db.InitDB(); err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
+
+	cleanupMessageTable(t)
+	cleanupUserTable(t)
 
 	userRepo := NewUserRepository()
 	messageRepo := NewMessageRepository()
@@ -111,4 +115,13 @@ func TestMessageRepository_DeleteMessage(t *testing.T) {
 	found, err := messageRepo.FindMessages(user1.ID, user2.ID, 10, 0)
 	assert.NoError(t, err)
 	assert.Len(t, found, 0)
+}
+
+// 帮助函数：清空 Messages 表中的所有数据
+func cleanupMessageTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.Message{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
+	}
 }

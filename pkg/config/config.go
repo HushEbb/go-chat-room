@@ -10,8 +10,9 @@ import (
 )
 
 type Config struct {
-	Database DatabaseConfig `mapstructure:"database"`
-	JWT      JWTConfig      `mapstructure:"jwt"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	JWT       JWTConfig       `mapstructure:"jwt"`
+	WebSocket WebSocketConfig `mapstructure:"websocket"`
 }
 
 type DatabaseConfig struct {
@@ -21,6 +22,15 @@ type DatabaseConfig struct {
 type JWTConfig struct {
 	Secret     string        `mapstructure:"secret"`
 	Expiration time.Duration `mapstructure:"expiration"`
+}
+
+type WebSocketConfig struct {
+	WriteWaitSeconds int `mapstructure:"write_wait_seconds"`
+	PongWaitSeconds  int `mapstructure:"pong_wait_seconds"`
+	MaxMessageSize   int `mapstructure:"max_message_size"`
+	// 重试相关配置
+	MessageRetryCount      int `mapstructure:"message_retry_count"`
+	MessageRetryIntervalMs int `mapstructure:"message_retry_interval_ms"`
 }
 
 var GlobalConfig Config

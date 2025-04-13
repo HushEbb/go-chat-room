@@ -5,6 +5,8 @@ import (
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 func setupTestDB(t *testing.T) {
@@ -16,6 +18,8 @@ func setupTestDB(t *testing.T) {
 	if err := db.InitDB(); err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
+
+	cleanupUserTable(t)
 }
 
 func TestAuthService_Register(t *testing.T) {
@@ -164,9 +168,11 @@ func TestAuthService_Login(t *testing.T) {
 	}
 }
 
-// 帮助函数：清理测试数据
-func cleanupTestUser(t *testing.T, userID uint) {
-	if err := db.DB.Delete(&model.User{}, userID).Error; err != nil {
-		t.Logf("Failed to cleanup test user: %v", err)
+// 帮助函数：清空 users 表中的所有数据
+func cleanupUserTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.User{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
 	}
 }

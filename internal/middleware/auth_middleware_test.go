@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"gorm.io/gorm"
 )
 
 func setupTestDB(t *testing.T) {
@@ -22,6 +23,9 @@ func setupTestDB(t *testing.T) {
 	if err := db.InitDB(); err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
+
+	cleanupMessageTable(t)
+	cleanupUserTable(t)
 }
 
 func setupTestUser(t *testing.T) (*model.User, string) {
@@ -117,5 +121,23 @@ func TestAuthMiddleware(t *testing.T) {
 				assert.Contains(t, w.Body.String(), "user_id")
 			}
 		})
+	}
+}
+
+// 帮助函数：清空 users 表中的所有数据
+func cleanupUserTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.User{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
+	}
+}
+
+// 帮助函数：清空 Messages 表中的所有数据
+func cleanupMessageTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.Message{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
 	}
 }

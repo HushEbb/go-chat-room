@@ -6,6 +6,8 @@ import (
 	"go-chat-room/pkg/db"
 	"testing"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 func setupTestDB(t *testing.T) {
@@ -17,6 +19,8 @@ func setupTestDB(t *testing.T) {
 	if err := db.InitDB(); err != nil {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
+
+	cleanupUserTable(t)
 }
 
 func TestUserRepository_Create(t *testing.T) {
@@ -139,5 +143,14 @@ func TestUserRepository_FindByID(t *testing.T) {
 	}
 	if found.ID != testUser.ID {
 		t.Errorf("Expected ID %v, got %v", testUser.ID, found.ID)
+	}
+}
+
+// 帮助函数：清空 users 表中的所有数据
+func cleanupUserTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.User{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
 	}
 }

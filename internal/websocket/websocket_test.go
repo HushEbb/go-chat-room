@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"go-chat-room/pkg/config"
 	"log"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,12 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
+}
+
+func setupTestWebsocket(t *testing.T) {
+	if err := config.InitTest(); err != nil {
+		t.Fatalf("Failed to initialize config: %v", err)
+	}
 }
 
 // 测试服务器设置
@@ -55,6 +62,7 @@ func connectWebSocket(t *testing.T, url string) *websocket.Conn {
 }
 
 func TestWebSocketConnection(t *testing.T) {
+	setupTestWebsocket(t)
 	hub := NewHub()
 	go hub.Run()
 
@@ -72,6 +80,7 @@ func TestWebSocketConnection(t *testing.T) {
 }
 
 func TestMessageDelivery(t *testing.T) {
+	setupTestWebsocket(t)
 	hub := NewHub()
 	go hub.Run()
 
@@ -118,6 +127,7 @@ func TestMessageDelivery(t *testing.T) {
 }
 
 func TestClientDisconnection(t *testing.T) {
+	setupTestWebsocket(t)
 	hub := NewHub()
 	go hub.Run()
 
@@ -146,6 +156,8 @@ func TestClientDisconnection(t *testing.T) {
 }
 
 func TestPingPong(t *testing.T) {
+	setupTestWebsocket(t)
+
 	// go test 默认时间为30s
 	// pongWait = 60s, pingPeriod = pongWait * 9 / 10
 	hub := NewHub()
@@ -204,6 +216,7 @@ func TestPingPong(t *testing.T) {
 }
 
 func TestBroadcastMessage(t *testing.T) {
+	setupTestWebsocket(t)
 	hub := NewHub()
 	go hub.Run()
 
