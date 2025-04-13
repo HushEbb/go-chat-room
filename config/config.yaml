@@ -6,5 +6,6 @@ jwt:
   expiration: 24h  # 支持时间单位：h(小时)、m(分钟)、s(秒)
 
 websocket:
+  broadcast_buffer_size: 256
   message_retry_count: 3 # 重试次数
-  message_retry_interval_ms: 50 # 重试间隔（毫秒）
+  message_retry_interval_ms: 100 # 重试间隔（毫秒）

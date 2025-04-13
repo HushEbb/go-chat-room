@@ -25,6 +25,8 @@ type JWTConfig struct {
 }
 
 type WebSocketConfig struct {
+	BroadcastBufferSize int `mapstructure:"broadcast_buffer_size"`
+
 	WriteWaitSeconds int `mapstructure:"write_wait_seconds"`
 	PongWaitSeconds  int `mapstructure:"pong_wait_seconds"`
 	MaxMessageSize   int `mapstructure:"max_message_size"`

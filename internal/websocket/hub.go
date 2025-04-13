@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"errors"
 	"go-chat-room/internal/model"
 	"go-chat-room/pkg/config"
 	"log"
@@ -20,19 +21,28 @@ type Hub struct {
 
 func NewHub() *Hub {
 	wsConfig := config.GlobalConfig.WebSocket
+
 	retryCount := wsConfig.MessageRetryCount
-	retryInterval := time.Duration(wsConfig.MessageRetryIntervalMs) * time.Millisecond
 	if retryCount <= 0 {
-		retryCount = 1
+		retryCount = 3
 		log.Printf("Warning: Invalid retryCount, using default %d", retryCount)
 	}
+
+	retryInterval := time.Duration(wsConfig.MessageRetryIntervalMs) * time.Millisecond
 	if retryInterval <= 0 {
-		retryInterval = 50 * time.Millisecond
+		retryInterval = 100 * time.Millisecond
 		log.Printf("Warning: Invalid retryInterval, using default %d", retryInterval)
 	}
+
+	broadcastBufferSize := wsConfig.BroadcastBufferSize
+	if broadcastBufferSize <= 0 {
+		broadcastBufferSize = 256
+		log.Printf("Warning: Invalid BroadcastBufferSize, using default %d", broadcastBufferSize)
+	}
+
 	return &Hub{
 		clients:       make(map[uint]*Client),
-		broadcast:     make(chan *model.Message),
+		broadcast:     make(chan *model.Message, broadcastBufferSize),
 		register:      make(chan *Client),
 		unregister:    make(chan *Client),
 		retryCount:    retryCount,
@@ -59,10 +69,30 @@ func (h *Hub) HandleMessage(message []byte, senderID uint) {
 		return
 	}
 
-	h.broadcast <- &model.Message{
+	m := &model.Message{
 		Content:    msg.Content,
 		SenderID:   senderID,
 		ReceiverID: msg.ReceiverID,
+	}
+
+	select {
+	case h.broadcast <- m:
+		log.Printf("Message from user %d queued via HandleMessage.", senderID)
+	default:
+		// Channel buffer is full, drop the message
+		log.Printf("Warning: Hub broadcast channel full. Dropping message from user %d via HandleMessage.", senderID)
+	}
+}
+
+func (h *Hub) BroadcastMessage(message *model.Message) error {
+	select {
+	case h.broadcast <- message:
+		log.Printf("Message (SenderID: %d) queued for broadcast.", message.SenderID)
+		return nil
+	default:
+		// Hub's broadcast channel is full or Hub is not running.
+		log.Printf("Warning: Hub broadcast channel full. Dropping message (SenderID: %d, ReceiverID: %d)", message.SenderID, message.ReceiverID)
+		return errors.New("hub broadcast channel is full")
 	}
 }
 
