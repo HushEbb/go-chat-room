@@ -1,7 +1,6 @@
 package service
 
 import (
-	"fmt"
 	"go-chat-room/internal/model"
 	"go-chat-room/internal/repository"
 	"go-chat-room/internal/websocket"
@@ -42,7 +41,7 @@ func (s *ChatService) SendMessage(senderID uint, req MessageRequest) error {
 	if err := s.hub.BroadcastMessage(message); err != nil {
 		// Handle the error returned by BroadcastMessage
 		log.Printf("SendMessage: Failed to queue message for broadcast (DB ID: %d): %v", message.ID, err)
-		return fmt.Errorf("Failed to queue message for real-time delivery: %w", err)
+		return err
 	} else {
 		log.Printf("SendMessage: Message (DB ID: %d) successfully queued for broadcast.", message.ID)
 	}
