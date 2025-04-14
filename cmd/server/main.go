@@ -3,6 +3,7 @@ package main
 import (
 	"go-chat-room/internal/api"
 	"go-chat-room/internal/middleware"
+	"go-chat-room/internal/websocket"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"log"
@@ -24,8 +25,24 @@ func main() {
 	// 创建Gin引擎
 	r := gin.Default()
 
+	// 初始化 Websocket hub
+	hub := websocket.NewHub()
+	go hub.Run()
+
 	// 注册API路由
 	authHandler := api.NewAuthHandler()
+	wsHandler := api.NewWSHandler(hub)
+	chatHandler := api.NewChatHandler(hub)
+
+	// WebSocket 连接
+	r.GET("/ws", middleware.AuthMiddleware(), wsHandler.HandleConnection)
+
+	// 聊天相关API
+	chat := r.Group("/api/chat").Use(middleware.AuthMiddleware())
+	{
+		chat.POST("/messages", chatHandler.SendMessage)
+		chat.GET("/messages/:other_user_id", chatHandler.GetChatHistory)
+	}
 
 	// 公开路由
 	r.POST("/api/auth/register", authHandler.Register)

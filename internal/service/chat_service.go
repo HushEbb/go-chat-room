@@ -12,10 +12,10 @@ type ChatService struct {
 	hub         *websocket.Hub
 }
 
-func NewChatService() *ChatService {
+func NewChatService(hub *websocket.Hub) *ChatService {
 	return &ChatService{
 		messageRepo: repository.NewMessageRepository(),
-		hub:         websocket.NewHub(),
+		hub:         hub,
 	}
 }
 
