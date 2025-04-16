@@ -10,9 +10,15 @@ import (
 )
 
 type Config struct {
+	Log       LogConfig       `mapstructure:"log"`
 	Database  DatabaseConfig  `mapstructure:"database"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	WebSocket WebSocketConfig `mapstructure:"websocket"`
+}
+
+type LogConfig struct {
+	Level          string `mapstructure:"level"`
+	ProductionMode bool   `mapstructure:"production_mode"`
 }
 
 type DatabaseConfig struct {

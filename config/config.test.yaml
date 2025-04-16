@@ -1,3 +1,7 @@
+log:
+  level: "debug" # debug, info, warn, error, fatal, panic
+  production_mode: false
+
 database:
   dsn: "root:password@tcp(127.0.0.1:3306)/chatroom_test?charset=utf8mb4&parseTime=True&loc=Local"
 
