@@ -6,8 +6,9 @@ import (
 	"go-chat-room/internal/proto"
 	"go-chat-room/internal/repository"
 	"go-chat-room/internal/websocket"
-	"log"
+	"go-chat-room/pkg/logger"
 
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -40,14 +41,14 @@ func (s *ChatService) SendMessage(senderID uint, req MessageRequest) error {
 
 	// 保存消息到数据库
 	if err := s.messageRepo.Create(dbMessage); err != nil {
-		log.Printf("Error saving message to DB: %v", err)
+		logger.L.Error("Error saving message to DB", zap.Error(err))
 		return err
 	}
 
 	// 获取用于广播的发送者信息
 	sender, err := s.userRepo.FindByID(senderID)
 	if err != nil || sender == nil {
-		log.Printf("SendMessage: Failed to find sender %d: %v", senderID, err)
+		logger.L.Warn("SendMessage: Failed to find sender", zap.Uint("senderID", senderID), zap.Error(err))
 		// TODO:
 		// 决定如何处理：在没有发送者信息的情况下继续还是返回错误?
 		// 目前在没有发送者信息的情况下继续：
@@ -68,11 +69,14 @@ func (s *ChatService) SendMessage(senderID uint, req MessageRequest) error {
 	// 将 proto 消息发送到 Hub 进行广播/推送
 	if err := s.hub.BroadcastMessage(protoMessage); err != nil {
 		// Handle the error returned by BroadcastMessage
-		log.Printf("SendMessage: failed to queue proto message for broadcast (DB ID: %d): %v", dbMessage.ID, err)
+		logger.L.Error("SendMessage: failed to queue proto message for broadcast",
+			zap.Uint64("dbMessageID", protoMessage.Id),
+			zap.Error(err))
 		// 决定是否应将此错误返回给API调用者
 		return fmt.Errorf("failed to queue message for real-time delivery: %w", err)
 	} else {
-		log.Printf("SendMessage: Proto message (DB ID: %d) successfully queued for broadcast.", dbMessage.ID)
+		logger.L.Info("SendMessage: Proto message successfully queued for broadcast",
+			zap.Uint64("dbMessageID", protoMessage.Id))
 	}
 
 	return nil

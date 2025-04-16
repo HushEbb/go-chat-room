@@ -3,7 +3,6 @@ package websocket
 import (
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/pkg/config"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -181,13 +180,13 @@ func TestPingPong(t *testing.T) {
 
 	go func() {
 		defer func() {
-			log.Println("Client read loop exiting.")
+			t.Log("Client read loop exiting.")
 		}()
 		for {
 			// 调用 NextReader 或 ReadMessage 来驱动底层读取和帧处理
 			if _, _, err := conn.ReadMessage(); err != nil {
 				// 当连接关闭时，退出循环
-				log.Printf("Client read loop error: %v", err)
+				t.Logf("Client read loop error: %v", err)
 				break
 			}
 			// 不需要处理读取到的消息，只需要保持读取活动
@@ -199,11 +198,11 @@ func TestPingPong(t *testing.T) {
 
 	pingReceived := make(chan bool, 1)
 	conn.SetPingHandler(func(appData string) error {
-		log.Println("Client PingHandler triggered!")
+		t.Log("Client PingHandler triggered!")
 		pingReceived <- true
 		err := conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
 		if err != nil {
-			log.Printf("Client failed to send pong: %v", err)
+			t.Logf("Client failed to send pong: %v", err)
 		}
 		return err
 	})
@@ -211,7 +210,7 @@ func TestPingPong(t *testing.T) {
 	// 等待服务器发送 ping (来自 WritePump 的自动 ping)
 	select {
 	case <-pingReceived:
-		log.Println("Test received notification via channel.")
+		t.Log("Test received notification via channel.")
 		// 成功收到ping
 	case <-time.After(pingPeriod + time.Second):
 		t.Fatal("No ping received from server")

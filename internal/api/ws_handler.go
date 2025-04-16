@@ -1,13 +1,14 @@
 package api
 
 import (
-	"log"
 	"net/http"
 
 	internalws "go-chat-room/internal/websocket"
+	"go-chat-room/pkg/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 )
 
 var upgrader = websocket.Upgrader{
@@ -30,20 +31,21 @@ func NewWSHandler(hub *internalws.Hub) *WSHandler {
 func (h *WSHandler) HandleConnection(c *gin.Context) {
 	userIDValue, exists := c.Get("userID")
 	if !exists {
-		log.Println("Error: userID not found in context for WebSocket")
+		logger.L.Error("userID not found in context for WebSocket")
 		return
 	}
 	userID, ok := userIDValue.(uint)
 	if !ok {
-		log.Printf("Error: userID in context is not uint: %T", userIDValue)
+		logger.L.Error("userID in context is not uint", zap.Any("value", userIDValue))
 		return
 	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		log.Printf("Failed to upgrade connection for user %d: %v", userID, err)
+		logger.L.Error("Failed to upgrade connection", zap.Uint("userID", userID), zap.Error(err))
 		return
 	}
+	logger.L.Info("WebSocket connection upgraded", zap.Uint("userID", userID))
 
 	client := internalws.NewClient(userID, conn, h.hub, h.hub)
 	h.hub.Register(client)

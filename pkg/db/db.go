@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"go-chat-room/internal/model"
 	"go-chat-room/pkg/config"
-	"log"
+	"go-chat-room/pkg/logger"
 
+	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 )
@@ -17,15 +18,17 @@ func InitDB() error {
 	var err error
 	DB, err = gorm.Open(mysql.Open(config.GlobalConfig.Database.DSN), &gorm.Config{})
 	if err != nil {
+		logger.L.Error("failed to connect to database", zap.Error(err))
 		return fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	// 自动迁移模式
 	err = DB.AutoMigrate(&model.User{}, &model.Message{})
 	if err != nil {
+		logger.L.Error("failed to migrate database", zap.Error(err))
 		return fmt.Errorf("failed to migrate database: %w", err)
 	}
 
-	log.Println("Database connected and migrated successfully")
+	logger.L.Info("Database connected and migrated successfully")
 	return nil
 }

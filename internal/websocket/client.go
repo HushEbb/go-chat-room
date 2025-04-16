@@ -1,11 +1,12 @@
 package websocket
 
 import (
-	"log"
+	"go-chat-room/pkg/logger"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
+	"go.uber.org/zap"
 )
 
 const (
@@ -38,6 +39,7 @@ func (c *Client) ReadPump() {
 	defer func() {
 		c.manager.Unregister(c)
 		c.Conn.Close()
+		logger.L.Debug("ReadPump finished", zap.Uint("userID", c.UserID))
 	}()
 
 	c.Conn.SetReadLimit(maxMessageSize)
@@ -51,9 +53,9 @@ func (c *Client) ReadPump() {
 		messageType, messageBytes, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				log.Printf("error: unexpected close error for user %d: %v", c.UserID, err)
+				logger.L.Error("Unexpected close error", zap.Uint("userID", c.UserID), zap.Error(err))
 			} else {
-				log.Printf("error: read error for user %d: %v", c.UserID, err)
+				logger.L.Info("Read error or connection closed normally", zap.Uint("userID", c.UserID), zap.Error(err))
 			}
 			break
 		}
@@ -61,7 +63,9 @@ func (c *Client) ReadPump() {
 		if messageType == websocket.BinaryMessage {
 			c.handler.HandleMessage(messageBytes, c.UserID)
 		} else {
-			log.Printf("Warning: Received non-binary message type (%d) from user %d. Ignoring.", messageType, c.UserID)
+			logger.L.Warn("Received non-binary message type. Ignoring.",
+				zap.Uint("userID", c.UserID),
+				zap.Int("messageType", messageType))
 			// TODO: 可选地以不同方式处理文本消息或断开客户端连接
 		}
 	}
@@ -72,6 +76,7 @@ func (c *Client) WritePump() {
 	defer func() {
 		ticker.Stop()
 		c.Conn.Close()
+		logger.L.Debug("WritePump finished", zap.Uint("userID", c.UserID))
 	}()
 
 	for {
@@ -79,6 +84,7 @@ func (c *Client) WritePump() {
 		case messageBytes, ok := <-c.Send:
 			if !ok {
 				// Send 通道已关闭
+				logger.L.Info("Send channel closed, closing connection", zap.Uint("userID", c.UserID))
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
@@ -89,16 +95,17 @@ func (c *Client) WritePump() {
 			err := c.Conn.WriteMessage(websocket.BinaryMessage, messageBytes)
 			c.mu.Unlock()
 			if err != nil {
-				log.Printf("error: failed to write binary message for user %d: %v", c.UserID, err)
+				logger.L.Error("Failed to write binary message", zap.Uint("userID", c.UserID), zap.Error(err))
 				return
 			}
 
+			// 批量写入优化
 			c.mu.Lock()
 			n := len(c.Send)
-			for range n {
+			for i := 0; i < n; i++ {
 				batchBytes := <-c.Send
 				if err := c.Conn.WriteMessage(websocket.BinaryMessage, batchBytes); err != nil {
-					log.Printf("error: failed to write batched binary message for user %d: %v", c.UserID, err)
+					logger.L.Error("Failed to write batched binary message", zap.Uint("userID", c.UserID), zap.Error(err))
 					c.mu.Unlock()
 					return
 				}
@@ -107,12 +114,12 @@ func (c *Client) WritePump() {
 
 		case <-ticker.C:
 			c.mu.Lock()
-			log.Printf("Sending ping from server")
+			logger.L.Debug("Sending ping from server", zap.Uint("userID", c.UserID))
 			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			err := c.Conn.WriteMessage(websocket.PingMessage, nil)
 			c.mu.Unlock()
 			if err != nil {
-				log.Printf("Failed to send ping: %v", err)
+				logger.L.Error("Failed to send ping", zap.Uint("userID", c.UserID), zap.Error(err))
 				return
 			}
 		}
