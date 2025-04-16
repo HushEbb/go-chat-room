@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/pkg/config"
 	"log"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"google.golang.org/protobuf/proto"
 )
 
 var upgrader = websocket.Upgrader{
@@ -96,31 +98,39 @@ func TestMessageDelivery(t *testing.T) {
 	// 等待连接建立
 	time.Sleep(100 * time.Millisecond)
 
-	// 测试消息发送
-	testMessage := map[string]interface{}{
-		"content":     "Hello, this is a test message",
-		"receiver_id": uint(2), // 发送给userID为2的用户
+	// --- 测试消息发送 (Protobuf) ---
+	// 创建客户端发送的消息 (ClientToServerMessage)
+	clientMsgToSend := &internalProto.ClientToServerMessage{
+		Content:    "Hello, this is a proto test message",
+		ReceiverId: 2, // 发送给userID为2的用户
 	}
 
-	// 从conn1 (userID=1) 发送消息到conn2 (userID=2)
-	err := conn1.WriteJSON(testMessage)
+	// 将客户端消息marshal为字节
+	data, err := proto.Marshal(clientMsgToSend)
 	assert.NoError(t, err)
 
-	// 设置读取超时
+	// 从conn1 (userID=1) 向 conn2 (userID=2) 发送二进制消息
+	err = conn1.WriteMessage(websocket.BinaryMessage, data)
+	assert.NoError(t, err)
+
+	// 在接收连接上设置读取截止时间
 	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
 
-	// 读取接收到的消息
-	var receivedMsg struct {
-		Content    string `json:"content"`
-		SenderID   uint   `json:"sender_id"`
-		ReceiverID uint   `json:"receiver_id"`
-	}
-
-	err = conn2.ReadJSON(&receivedMsg)
+	// --- 读取并解码接收到的消息 (Protobuf) ---
+	messageType, receivedData, err := conn2.ReadMessage()
 	assert.NoError(t, err)
-	assert.Equal(t, testMessage["content"], receivedMsg.Content)
-	assert.Equal(t, uint(1), receivedMsg.SenderID)
-	assert.Equal(t, uint(2), receivedMsg.ReceiverID)
+	assert.Equal(t, websocket.BinaryMessage, messageType) // 期望二进制消息
+
+	// 将接收到的字节解组为预期的完整ChatMessage
+	var receivedMsg internalProto.ChatMessage
+	err = proto.Unmarshal(receivedData, &receivedMsg)
+	assert.NoError(t, err)
+
+	// 断言接收到的Protobuf消息字段
+	assert.Equal(t, clientMsgToSend.Content, receivedMsg.Content)       // 检查内容
+	assert.Equal(t, uint64(1), receivedMsg.SenderId)                    // 服务器应设置SenderId
+	assert.Equal(t, clientMsgToSend.ReceiverId, receivedMsg.ReceiverId) // 检查ReceiverId
+	// 可选地检查其他字段，如SenderUsername、CreatedAt (如果测试需要/可能)
 
 	// 清理连接
 	hub.clients = make(map[uint]*Client)
@@ -236,33 +246,42 @@ func TestBroadcastMessage(t *testing.T) {
 	// 等待连接建立
 	time.Sleep(100 * time.Millisecond)
 
-	// 发送广播消息
-	broadcastMsg := map[string]interface{}{
-		"content":     "Broadcast test message",
-		"receiver_id": uint(0), // 0表示广播
+	// --- 发送广播消息 (Protobuf) ---
+	clientMsgToSend := &internalProto.ClientToServerMessage{
+		Content:    "Proto broadcast test message",
+		ReceiverId: 0, // 0表示广播
 	}
 
-	err := conn1.WriteJSON(broadcastMsg)
+	// marshal客户端消息
+	data, err := proto.Marshal(clientMsgToSend)
 	assert.NoError(t, err)
 
-	// 设置读取超时，验证发送者不会收到消息
+	// 从conn1发送二进制消息
+	err = conn1.WriteMessage(websocket.BinaryMessage, data)
+	assert.NoError(t, err)
+
+	// --- 验证发送者 (conn1) 是否未收到消息 ---
 	conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	_, _, err = conn1.ReadMessage()
-	assert.Error(t, err) // 应该超时错误，因为发送者不应该收到消息
+	assert.Error(t, err) // 期望超时错误，发送者不应收到消息
 
-	// 验证其他客户端是否收到消息
-	for _, conn := range []*websocket.Conn{conn2, conn3} {
-		var receivedMsg struct {
-			Content    string `json:"content"`
-			SenderID   uint   `json:"sender_id"`
-			ReceiverID uint   `json:"receiver_id"`
-		}
+	// --- 验证其他客户端是否收到广播消息 (Protobuf) ---
+	for i, conn := range []*websocket.Conn{conn2, conn3} {
+		conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // 为接收者设置读取截止时间
 
-		err = conn.ReadJSON(&receivedMsg)
-		assert.NoError(t, err)
-		assert.Equal(t, broadcastMsg["content"], receivedMsg.Content)
-		assert.Equal(t, uint(1), receivedMsg.SenderID)
-		assert.Equal(t, uint(0), receivedMsg.ReceiverID)
+		messageType, receivedData, err := conn.ReadMessage()
+		assert.NoError(t, err, "Client %d should receive message", i+2)
+
+		assert.Equal(t, websocket.BinaryMessage, messageType, "Client %d received wrong message type", i+2)
+
+		var receivedMsg internalProto.ChatMessage
+		err = proto.Unmarshal(receivedData, &receivedMsg)
+		assert.NoError(t, err, "Client %d failed to unmarshal proto", i+2)
+
+		// 断言接收到的Protobuf消息
+		assert.Equal(t, clientMsgToSend.Content, receivedMsg.Content, "Client %d content mismatch", i+2)
+		assert.Equal(t, uint64(1), receivedMsg.SenderId, "Client %d sender ID mismatch", i+2) // 发送者是用户1
+		assert.Equal(t, uint64(0), receivedMsg.ReceiverId, "Client %d receiver ID should be 0 for broadcast", i+2)
 	}
 
 	// 清理连接

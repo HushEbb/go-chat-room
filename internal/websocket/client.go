@@ -48,7 +48,7 @@ func (c *Client) ReadPump() {
 	})
 
 	for {
-		_, message, err := c.Conn.ReadMessage()
+		messageType, messageBytes, err := c.Conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
 				log.Printf("error: unexpected close error for user %d: %v", c.UserID, err)
@@ -57,7 +57,13 @@ func (c *Client) ReadPump() {
 			}
 			break
 		}
-		c.handler.HandleMessage(message, c.UserID)
+
+		if messageType == websocket.BinaryMessage {
+			c.handler.HandleMessage(messageBytes, c.UserID)
+		} else {
+			log.Printf("Warning: Received non-binary message type (%d) from user %d. Ignoring.", messageType, c.UserID)
+			// TODO: 可选地以不同方式处理文本消息或断开客户端连接
+		}
 	}
 }
 
@@ -70,7 +76,7 @@ func (c *Client) WritePump() {
 
 	for {
 		select {
-		case message, ok := <-c.Send:
+		case messageBytes, ok := <-c.Send:
 			if !ok {
 				// Send 通道已关闭
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
@@ -80,25 +86,22 @@ func (c *Client) WritePump() {
 
 			c.mu.Lock()
 			// TODO: message type
-			w, err := c.Conn.NextWriter(websocket.TextMessage)
+			err := c.Conn.WriteMessage(websocket.BinaryMessage, messageBytes)
+			c.mu.Unlock()
 			if err != nil {
-				c.mu.Unlock()
-				log.Printf("error: failed to get next writer for user %d: %v", c.UserID, err)
+				log.Printf("error: failed to write binary message for user %d: %v", c.UserID, err)
 				return
 			}
 
-			w.Write(message)
-
-			// 将队列中的消息也一起发送
+			c.mu.Lock()
 			n := len(c.Send)
 			for range n {
-				w.Write(<-c.Send)
-			}
-
-			if err := w.Close(); err != nil {
-				c.mu.Unlock()
-				log.Printf("error: failed to close writer for user %d: %v", c.UserID, err)
-				return
+				batchBytes := <-c.Send
+				if err := c.Conn.WriteMessage(websocket.BinaryMessage, batchBytes); err != nil {
+					log.Printf("error: failed to write batched binary message for user %d: %v", c.UserID, err)
+					c.mu.Unlock()
+					return
+				}
 			}
 			c.mu.Unlock()
 

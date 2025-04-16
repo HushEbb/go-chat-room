@@ -1,6 +1,7 @@
 package api
 
 import (
+	"go-chat-room/internal/repository"
 	"go-chat-room/internal/service"
 	"go-chat-room/internal/websocket"
 	"net/http"
@@ -15,9 +16,9 @@ type ChatHandler struct {
 }
 
 // 创建一个新的聊天处理器实例
-func NewChatHandler(hub *websocket.Hub) *ChatHandler {
+func NewChatHandler(hub *websocket.Hub, messageRepo *repository.MessageRepository, userRepo *repository.UserRepository) *ChatHandler {
 	return &ChatHandler{
-		chatService: service.NewChatService(hub),
+		chatService: service.NewChatService(hub, messageRepo, userRepo),
 	}
 }
 

@@ -3,6 +3,7 @@ package main
 import (
 	"go-chat-room/internal/api"
 	"go-chat-room/internal/middleware"
+	"go-chat-room/internal/repository"
 	"go-chat-room/internal/websocket"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
@@ -29,10 +30,14 @@ func main() {
 	hub := websocket.NewHub()
 	go hub.Run()
 
+	// 创建存储库
+	userRepo := repository.NewUserRepository()
+	messageRepo := repository.NewMessageRepository()
+
 	// 注册API路由
-	authHandler := api.NewAuthHandler()
+	authHandler := api.NewAuthHandler(userRepo)
 	wsHandler := api.NewWSHandler(hub)
-	chatHandler := api.NewChatHandler(hub)
+	chatHandler := api.NewChatHandler(hub, messageRepo, userRepo)
 
 	// WebSocket 连接
 	r.GET("/ws", middleware.AuthMiddleware(), wsHandler.HandleConnection)

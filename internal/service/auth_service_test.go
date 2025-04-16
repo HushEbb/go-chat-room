@@ -2,6 +2,7 @@ package service
 
 import (
 	"go-chat-room/internal/model"
+	"go-chat-room/internal/repository"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"testing"
@@ -24,7 +25,8 @@ func setupTestDB(t *testing.T) {
 
 func TestAuthService_Register(t *testing.T) {
 	setupTestDB(t)
-	service := NewAuthService()
+	userRepo := repository.NewUserRepository()
+	service := NewAuthService(userRepo)
 
 	tests := []struct {
 		name    string
@@ -94,7 +96,8 @@ func TestAuthService_Register(t *testing.T) {
 
 func TestAuthService_Login(t *testing.T) {
 	setupTestDB(t)
-	service := NewAuthService()
+	userRepo := repository.NewUserRepository()
+	service := NewAuthService(userRepo)
 
 	// 先注册一个测试用户
 	registerReq := RegisterRequest{

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"go-chat-room/internal/repository"
 	"go-chat-room/internal/service"
 	"net/http"
 
@@ -13,9 +14,9 @@ type AuthHandler struct {
 }
 
 // 创建一个新的认证处理器实例
-func NewAuthHandler() *AuthHandler {
+func NewAuthHandler(userRepo *repository.UserRepository) *AuthHandler {
 	return &AuthHandler{
-		authService: service.NewAuthService(),
+		authService: service.NewAuthService(userRepo),
 	}
 }
 

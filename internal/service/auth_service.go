@@ -15,9 +15,9 @@ type AuthService struct {
 }
 
 // 创建一个新的认证服务实例
-func NewAuthService() *AuthService {
+func NewAuthService(userRepo *repository.UserRepository) *AuthService {
 	return &AuthService{
-		userRepo: repository.NewUserRepository(),
+		userRepo: userRepo,
 	}
 }
 
