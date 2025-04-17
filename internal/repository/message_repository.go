@@ -21,11 +21,11 @@ func (r *MessageRepository) Create(message *model.Message) error {
 }
 
 // 获取两个用户之间的聊天记录
-func (r *MessageRepository) FindMessages(userID, otherID uint, limit, offset int) ([]model.Message, error) {
+func (r *MessageRepository) FindMessagesBetweenUsers(userID1, userID2 uint, limit, offset int) ([]model.Message, error) {
 	var messages []model.Message
 	err := r.db.Where(
 		"(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)",
-		userID, otherID, otherID, userID,
+		userID1, userID2, userID2, userID1,
 	).Order("created_at DESC").
 		Limit(limit).
 		Offset(offset).

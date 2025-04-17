@@ -9,7 +9,6 @@ import (
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type Hub struct {
@@ -59,50 +58,6 @@ func (h *Hub) Register(client *Client) {
 
 func (h *Hub) Unregister(client *Client) {
 	h.unregister <- client
-}
-
-func (h *Hub) HandleMessage(message []byte, senderID uint) {
-	var clientMsg internalProto.ClientToServerMessage
-	if err := proto.Unmarshal(message, &clientMsg); err != nil {
-		logger.L.Error("Failed to unmarshal proto message", zap.Uint("senderID", senderID), zap.Error(err))
-		return
-	}
-
-	// TODO: 理想情况下，在此处获取发送者的用户名/头像或传递它
-	// 目前，使用占位符。这可能最好在ChatService中处理。
-	senderUsername := "Unknown"
-	senderAvatar := "default.png"
-	// TODO:
-	// if client, ok := h.clients[senderID]; ok {
-	// 	// 如果你在客户端结构体上存储用户信息，请使用它
-	//     // senderUsername = client.Username // 示例
-	// }
-
-	// 创建用于广播的完整ChatMessage
-	// 注意：ID和CreatedAt将在保存到数据库后设置(如果需要广播)
-	chatMsg := &internalProto.ChatMessage{
-		// ID: 0, // 如果需要，稍后设置
-		Content:        clientMsg.Content,
-		SenderId:       uint64(senderID),
-		ReceiverId:     clientMsg.ReceiverId,
-		CreatedAt:      timestamppb.Now(), // 使用当前时间进行广播
-		SenderUsername: senderUsername,    // 添加发送者信息
-		SenderAvatar:   senderAvatar,
-	}
-
-	select {
-	case h.broadcast <- chatMsg:
-		logger.L.Debug("Proto message queued via HandleMessage", zap.Uint("senderID", senderID))
-	default:
-		// Channel buffer is full, drop the message
-		logger.L.Warn("Warning: Hub broadcast channel full. Dropping proto message.", zap.Uint("senderID", senderID))
-	}
-
-	// TODO:
-	// --- 重要提示 ---
-	// 保存到数据库仍然应该发生，可能在其他地方触发(例如，ChatService)。
-	// HandleMessage可能*只*负责通过WebSocket转发消息。
-	// 如果HandleMessage*也*需要触发保存，你将在此处将clientMsg + senderID转换为model.Message，并将其传递给服务/存储库。
 }
 
 func (h *Hub) BroadcastMessage(message *internalProto.ChatMessage) error {

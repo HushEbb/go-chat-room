@@ -5,6 +5,7 @@ import (
 	"go-chat-room/internal/repository"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
+	"go-chat-room/pkg/logger"
 	"go-chat-room/pkg/utils"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,10 @@ import (
 func setupTestDB(t *testing.T) {
 	if err := config.InitTest(); err != nil {
 		t.Fatalf("Failed to initialize config: %v", err)
+	}
+
+	if err := logger.InitLogger("debug", false); err != nil {
+		t.Fatalf("Fail to initialize config: %v", err)
 	}
 
 	if err := db.InitDB(); err != nil {

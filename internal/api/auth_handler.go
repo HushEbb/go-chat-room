@@ -1,7 +1,6 @@
 package api
 
 import (
-	"go-chat-room/internal/repository"
 	"go-chat-room/internal/service"
 	"net/http"
 
@@ -14,9 +13,9 @@ type AuthHandler struct {
 }
 
 // 创建一个新的认证处理器实例
-func NewAuthHandler(userRepo *repository.UserRepository) *AuthHandler {
+func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 	return &AuthHandler{
-		authService: service.NewAuthService(userRepo),
+		authService: authService,
 	}
 }
 
@@ -37,9 +36,9 @@ func (h *AuthHandler) Register(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"message": "Register successful",
 		"user": gin.H{
-			"id": user.ID,
+			"id":       user.ID,
 			"username": user.Username,
-			"email": user.Email,
+			"email":    user.Email,
 		},
 	})
 }
@@ -61,10 +60,10 @@ func (h *AuthHandler) Login(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"token": token,
 		"user": gin.H{
-			"id": user.ID,
+			"id":       user.ID,
 			"username": user.Username,
-			"email": user.Email,
-			"avator": user.Avatar,
+			"email":    user.Email,
+			"avator":   user.Avatar,
 		},
 	})
 }

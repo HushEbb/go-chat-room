@@ -16,7 +16,9 @@ var DB *gorm.DB
 // 初始化数据库连接
 func InitDB() error {
 	var err error
-	DB, err = gorm.Open(mysql.Open(config.GlobalConfig.Database.DSN), &gorm.Config{})
+	DB, err = gorm.Open(mysql.Open(config.GlobalConfig.Database.DSN), &gorm.Config{
+		DisableForeignKeyConstraintWhenMigrating: true,
+	})
 	if err != nil {
 		logger.L.Error("failed to connect to database", zap.Error(err))
 		return fmt.Errorf("failed to connect to database: %w", err)

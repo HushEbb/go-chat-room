@@ -21,22 +21,28 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSHandler struct {
-	hub *internalws.Hub
+	hub        internalws.ConnectionManager
+	msgHandler internalws.MessageHandler
 }
 
-func NewWSHandler(hub *internalws.Hub) *WSHandler {
-	return &WSHandler{hub: hub}
+func NewWSHandler(cm internalws.ConnectionManager, mh internalws.MessageHandler) *WSHandler {
+	return &WSHandler{
+		hub:        cm,
+		msgHandler: mh,
+	}
 }
 
 func (h *WSHandler) HandleConnection(c *gin.Context) {
 	userIDValue, exists := c.Get("userID")
 	if !exists {
 		logger.L.Error("userID not found in context for WebSocket")
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "User not authenticated"})
 		return
 	}
 	userID, ok := userIDValue.(uint)
 	if !ok {
 		logger.L.Error("userID in context is not uint", zap.Any("value", userIDValue))
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Invalid user ID format in context"})
 		return
 	}
 
@@ -47,7 +53,7 @@ func (h *WSHandler) HandleConnection(c *gin.Context) {
 	}
 	logger.L.Info("WebSocket connection upgraded", zap.Uint("userID", userID))
 
-	client := internalws.NewClient(userID, conn, h.hub, h.hub)
+	client := internalws.NewClient(userID, conn, h.msgHandler, h.hub)
 	h.hub.Register(client)
 
 	go client.WritePump()

@@ -11,7 +11,7 @@ import (
 
 const (
 	writeWait      = 10 * time.Second    // 写超时
-	pongWait       = 60 * time.Second    // 等待pong的最大时间
+	pongWait       = 30 * time.Second    // 等待pong的最大时间
 	pingPeriod     = (pongWait * 9) / 10 // 发送ping的周期
 	maxMessageSize = 512                 // 消息最大长度
 )
@@ -45,6 +45,7 @@ func (c *Client) ReadPump() {
 	c.Conn.SetReadLimit(maxMessageSize)
 	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
 	c.Conn.SetPongHandler(func(string) error {
+		logger.L.Debug("Pong received", zap.Uint("userID", c.UserID))
 		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})

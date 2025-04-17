@@ -4,6 +4,7 @@ import (
 	"go-chat-room/internal/model"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
+	"go-chat-room/pkg/logger"
 	"testing"
 	"time"
 
@@ -14,6 +15,10 @@ import (
 func setupTestMessages(t *testing.T) (*MessageRepository, *UserRepository, *model.User, *model.User) {
 	if err := config.InitTest(); err != nil {
 		t.Fatalf("Failed to initialize config: %v", err)
+	}
+
+	if err := logger.InitLogger("debug", false); err != nil {
+		t.Fatalf("Fail to initialize config: %v", err)
 	}
 
 	if err := db.InitDB(); err != nil {
@@ -88,7 +93,7 @@ func TestMessageRepository_FindMessages(t *testing.T) {
 	}
 
 	// Test finding messages
-	found, err := messageRepo.FindMessages(user1.ID, user2.ID, 10, 0)
+	found, err := messageRepo.FindMessagesBetweenUsers(user1.ID, user2.ID, 10, 0)
 	assert.NoError(t, err)
 	assert.Len(t, found, 2)
 }
@@ -112,7 +117,7 @@ func TestMessageRepository_DeleteMessage(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify message is deleted
-	found, err := messageRepo.FindMessages(user1.ID, user2.ID, 10, 0)
+	found, err := messageRepo.FindMessagesBetweenUsers(user1.ID, user2.ID, 10, 0)
 	assert.NoError(t, err)
 	assert.Len(t, found, 0)
 }

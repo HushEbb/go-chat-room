@@ -1,8 +1,13 @@
 package websocket
 
 import (
+	"go-chat-room/internal/model"
 	internalProto "go-chat-room/internal/proto"
+	"go-chat-room/internal/repository"
+	"go-chat-room/internal/service"
 	"go-chat-room/pkg/config"
+	"go-chat-room/pkg/db"
+	"go-chat-room/pkg/logger"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
 	"google.golang.org/protobuf/proto"
+	"gorm.io/gorm"
 )
 
 var upgrader = websocket.Upgrader{
@@ -21,16 +27,49 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// 帮助函数：清空 users 表中的所有数据
+func cleanupUserTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.User{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
+	}
+}
+
+// 帮助函数：清空 Messages 表中的所有数据
+func cleanupMessageTable(t *testing.T) {
+	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.Message{}).Error; err != nil {
+		t.Logf("Failed to cleanup users table: %v", err)
+	} else {
+		t.Log("Successfully cleaned up users table.")
+	}
+}
+
 func setupTestWebsocket(t *testing.T) {
 	if err := config.InitTest(); err != nil {
 		t.Fatalf("Failed to initialize config: %v", err)
 	}
+
+	if err := logger.InitLogger("debug", false); err != nil {
+		t.Fatalf("Fail to initialize config: %v", err)
+	}
+
+	if err := db.InitDB(); err != nil {
+		t.Fatalf("Failed to connect to test database: %v", err)
+	}
+
+	cleanupMessageTable(t)
+	cleanupUserTable(t)
 }
 
 // 测试服务器设置
 func setupTestServer(t *testing.T, hub *Hub, userID uint) (*gin.Engine, string) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
+
+	messageRepo := repository.NewMessageRepository()
+	userRepo := repository.NewUserRepository()
+	chatService := service.NewChatService(hub, messageRepo, userRepo)
 
 	router.GET("/ws", func(c *gin.Context) {
 		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -39,7 +78,7 @@ func setupTestServer(t *testing.T, hub *Hub, userID uint) (*gin.Engine, string) 
 			return
 		}
 
-		client := NewClient(userID, conn, hub, hub)
+		client := NewClient(userID, conn, chatService, hub)
 		hub.Register(client)
 
 		go client.ReadPump()
@@ -82,6 +121,19 @@ func TestWebSocketConnection(t *testing.T) {
 
 func TestMessageDelivery(t *testing.T) {
 	setupTestWebsocket(t)
+
+	// --- 创建测试用户 ---
+	// 在发送消息前，确保测试数据库中有发送者和接收者用户
+	user1 := &model.User{Username: "testuser1", Password: "hash1", Email: "user1@example.com"} // 确保包含必要字段
+	user2 := &model.User{Username: "testuser2", Password: "hash2", Email: "user2@example.com"} // 确保包含必要字段
+	if err := db.DB.Create(&user1).Error; err != nil {
+		t.Fatalf("Failed to create test user 1: %v", err)
+	}
+	if err := db.DB.Create(&user2).Error; err != nil {
+		t.Fatalf("Failed to create test user 2: %v", err)
+	}
+	t.Log("Created test users 1 and 2") // 添加日志确认
+
 	hub := NewHub()
 	go hub.Run()
 
@@ -226,6 +278,23 @@ func TestPingPong(t *testing.T) {
 
 func TestBroadcastMessage(t *testing.T) {
 	setupTestWebsocket(t)
+
+	// --- 创建测试用户 ---
+	// 在发送消息前，确保测试数据库中有发送者和接收者用户
+	user1 := &model.User{Username: "testuser1", Password: "hash1", Email: "user1@example.com"} // 确保包含必要字段
+	user2 := &model.User{Username: "testuser2", Password: "hash2", Email: "user2@example.com"} // 确保包含必要字段
+	user3 := &model.User{Username: "testuser3", Password: "hash3", Email: "user3@example.com"} // 确保包含必要字段
+	if err := db.DB.Create(&user1).Error; err != nil {
+		t.Fatalf("Failed to create test user 1: %v", err)
+	}
+	if err := db.DB.Create(&user2).Error; err != nil {
+		t.Fatalf("Failed to create test user 2: %v", err)
+	}
+	if err := db.DB.Create(&user3).Error; err != nil {
+		t.Fatalf("Failed to create test user 3: %v", err)
+	}
+	t.Log("Created test users 1, 2 and 3") // 添加日志确认
+
 	hub := NewHub()
 	go hub.Run()
 
