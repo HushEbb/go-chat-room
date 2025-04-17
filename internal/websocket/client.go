@@ -1,6 +1,8 @@
 package websocket
 
 import (
+	"errors"
+	"go-chat-room/internal/interfaces"
 	"go-chat-room/pkg/logger"
 	"sync"
 	"time"
@@ -21,17 +23,53 @@ type Client struct {
 	Conn    *websocket.Conn
 	Send    chan []byte
 	mu      sync.Mutex
-	handler MessageHandler
-	manager ConnectionManager
+	handler interfaces.MessageHandler
+	manager interfaces.ConnectionManager
+	// 添加一个标志以防止双重关闭 Send 通道
+	sendClosed bool
 }
 
-func NewClient(userID uint, conn *websocket.Conn, handler MessageHandler, manager ConnectionManager) *Client {
+func NewClient(userID uint, conn *websocket.Conn, handler interfaces.MessageHandler, manager interfaces.ConnectionManager) *Client {
 	return &Client{
 		UserID:  userID,
 		Conn:    conn,
 		Send:    make(chan []byte, 256),
 		handler: handler,
 		manager: manager,
+	}
+}
+
+func (c *Client) GetUserID() uint {
+	return c.UserID
+}
+
+// QueueBytes 尝试非阻塞地将数据发送到客户端的发送缓冲区。
+// 如果缓冲区已满或通道已关闭，则返回错误。
+func (c *Client) QueueBytes(data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.sendClosed {
+		return errors.New("send channel closed")
+	}
+
+	select {
+	case c.Send <- data:
+		return nil
+	default:
+		logger.L.Warn("Client send buffer full, dropping message", zap.Uint("userID", c.UserID))
+		return errors.New("client senf buffer full")
+	}
+}
+
+// 安全地关闭 Send 通道一次
+func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.sendClosed {
+		close(c.Send)
+		c.sendClosed = true
+		logger.L.Debug("Client Send channel closed by manager", zap.Uint("userID", c.UserID))
 	}
 }
 
@@ -43,10 +81,15 @@ func (c *Client) ReadPump() {
 	}()
 
 	c.Conn.SetReadLimit(maxMessageSize)
-	c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+	if err := c.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		logger.L.Error("Failed to set initial read deadline", zap.Uint("userID", c.UserID), zap.Error(err))
+		return
+	}
 	c.Conn.SetPongHandler(func(string) error {
 		logger.L.Debug("Pong received", zap.Uint("userID", c.UserID))
-		c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		if err := c.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+			logger.L.Warn("Failed to reset read deadline on pong", zap.Uint("userID", c.UserID), zap.Error(err))
+		}
 		return nil
 	})
 
@@ -89,7 +132,11 @@ func (c *Client) WritePump() {
 				c.Conn.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
+
+			if err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				logger.L.Error("Failed to set write deadline", zap.Uint("userID", c.UserID), zap.Error(err))
+				return // 如果无法设置截止时间，则退出
+			}
 
 			c.mu.Lock()
 			// TODO: message type
@@ -115,8 +162,11 @@ func (c *Client) WritePump() {
 
 		case <-ticker.C:
 			c.mu.Lock()
+			if err := c.Conn.SetWriteDeadline(time.Now().Add(writeWait)); err != nil {
+				logger.L.Error("Failed to set write deadline for ping", zap.Uint("userID", c.UserID), zap.Error(err))
+				return
+			}
 			logger.L.Debug("Sending ping from server", zap.Uint("userID", c.UserID))
-			c.Conn.SetWriteDeadline(time.Now().Add(writeWait))
 			err := c.Conn.WriteMessage(websocket.PingMessage, nil)
 			c.mu.Unlock()
 			if err != nil {

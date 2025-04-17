@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"errors"
+	"go-chat-room/internal/interfaces"
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/logger"
@@ -12,10 +13,10 @@ import (
 )
 
 type Hub struct {
-	clients    map[uint]*Client
+	clients    map[uint]interfaces.Client
 	broadcast  chan *internalProto.ChatMessage
-	register   chan *Client
-	unregister chan *Client
+	register   chan interfaces.Client
+	unregister chan interfaces.Client
 
 	retryCount    int
 	retryInterval time.Duration
@@ -43,20 +44,20 @@ func NewHub() *Hub {
 	}
 
 	return &Hub{
-		clients:       make(map[uint]*Client),
+		clients:       make(map[uint]interfaces.Client),
 		broadcast:     make(chan *internalProto.ChatMessage, broadcastBufferSize),
-		register:      make(chan *Client),
-		unregister:    make(chan *Client),
+		register:      make(chan interfaces.Client),
+		unregister:    make(chan interfaces.Client),
 		retryCount:    retryCount,
 		retryInterval: retryInterval,
 	}
 }
 
-func (h *Hub) Register(client *Client) {
+func (h *Hub) Register(client interfaces.Client) {
 	h.register <- client
 }
 
-func (h *Hub) Unregister(client *Client) {
+func (h *Hub) Unregister(client interfaces.Client) {
 	h.unregister <- client
 }
 
@@ -72,14 +73,14 @@ func (h *Hub) BroadcastMessage(message *internalProto.ChatMessage) error {
 	}
 }
 
-func (h *Hub) trySendMessage(client *Client, data []byte) {
+func (h *Hub) trySendMessage(client interfaces.Client, data []byte) {
 	select {
 	case client.Send <- data:
 		// 发送成功
 	default:
 		for i := 0; i < h.retryCount; i++ {
 			logger.L.Warn("Client send buffer full, retry attempt",
-				zap.Uint("userID", client.UserID),
+				zap.Uint("userID", client.GetUserID()),
 				zap.Int("attempt", i+1))
 			timer := time.NewTimer(h.retryInterval)
 			select {
@@ -93,12 +94,12 @@ func (h *Hub) trySendMessage(client *Client, data []byte) {
 		}
 		// 所有重试失败 关闭连接
 		logger.L.Error("Client send buffer still full after retries, closing connection",
-			zap.Uint("userID", client.UserID),
+			zap.Uint("userID", client.GetUserID()),
 			zap.Int("attempts", h.retryCount))
 		// TODO: 如果 Run 不是唯一的 goroutine 操作 clients map 需要加锁保护
-		if _, ok := h.clients[client.UserID]; ok {
+		if _, ok := h.clients[client.GetUserID()]; ok {
 			close(client.Send)
-			delete(h.clients, client.UserID)
+			delete(h.clients, client.GetUserID())
 		}
 	}
 }
@@ -108,15 +109,15 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.register:
 			// 注册新用户
-			h.clients[client.UserID] = client
-			logger.L.Info("Client registered", zap.Uint("userID", client.UserID))
+			h.clients[client.GetUserID()] = client
+			logger.L.Info("Client registered", zap.Uint("userID", client.GetUserID()))
 
 		case client := <-h.unregister:
 			// 注销客户端
-			if _, ok := h.clients[client.UserID]; ok {
-				delete(h.clients, client.UserID)
+			if _, ok := h.clients[client.GetUserID()]; ok {
+				delete(h.clients, client.GetUserID())
 				close(client.Send)
-				logger.L.Info("Client unregistered", zap.Uint("userID", client.UserID))
+				logger.L.Info("Client unregistered", zap.Uint("userID", client.GetUserID()))
 			}
 		case chatMessage := <-h.broadcast:
 			// 消息广播处理
@@ -138,7 +139,7 @@ func (h *Hub) Run() {
 			} else {
 				// 群发消息
 				for _, client := range h.clients {
-					if client.UserID != uint(chatMessage.SenderId) {
+					if client.GetUserID() != uint(chatMessage.SenderId) {
 						h.trySendMessage(client, data)
 					}
 				}

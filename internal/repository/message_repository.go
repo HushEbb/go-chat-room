@@ -3,7 +3,9 @@ package repository
 import (
 	"go-chat-room/internal/model"
 	"go-chat-room/pkg/db"
+	"go-chat-room/pkg/logger"
 
+	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
@@ -22,6 +24,7 @@ func (r *MessageRepository) Create(message *model.Message) error {
 
 // 获取两个用户之间的聊天记录
 func (r *MessageRepository) FindMessagesBetweenUsers(userID1, userID2 uint, limit, offset int) ([]model.Message, error) {
+	// TODO: 用于私聊，是否实现也用于群聊/广播
 	var messages []model.Message
 	err := r.db.Where(
 		"(sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)",
@@ -66,3 +69,17 @@ func (r *MessageRepository) FindMessagesBySenderID(senderID uint, limit, offset 
 func (r *MessageRepository) DeleteMessage(messageID uint) error {
 	return r.db.Delete(&model.Message{}, messageID).Error
 }
+
+// 将消息标记为已传递
+func (r *MessageRepository) MarkMessageAsDelivered(messageID uint) error {
+	result := r.db.Model(&model.Message{}).Where("id = ?", messageID).Update("is_delivered", true)
+	if result.Error != nil {
+		logger.L.Error("Failed to mark message as delivered", zap.Uint("messageID", messageID), zap.Error(result.Error))
+	} else if result.RowsAffected == 0 {
+		logger.L.Warn("Attempted to mark message as delivered, but message not found or already marked", zap.Uint("messageID", messageID))
+	}
+	return result.Error
+}
+
+// 查找特定接收者的未传递消息
+// func (r *MessageRepository) FindUndeliveredMessages(receiverID uint) ([])
