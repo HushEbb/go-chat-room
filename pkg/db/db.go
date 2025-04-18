@@ -25,7 +25,12 @@ func InitDB() error {
 	}
 
 	// 自动迁移模式
-	err = DB.AutoMigrate(&model.User{}, &model.Message{})
+	err = DB.AutoMigrate(
+		&model.User{},
+		&model.Message{},
+		&model.Group{},
+		&model.GroupMember{},
+	)
 	if err != nil {
 		logger.L.Error("failed to migrate database", zap.Error(err))
 		return fmt.Errorf("failed to migrate database: %w", err)
