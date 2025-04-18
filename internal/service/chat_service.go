@@ -214,7 +214,6 @@ func (s *ChatService) SendMessage(senderID uint, req MessageRequest) error {
 	} else {
 		logger.L.Debug("SendMessage: Attempting direct message send", zap.Uint("dbMessageID", dbMessage.ID), zap.Uint("receiverID", req.ReceiverID))
 
-		// TODO: why ?
 		// Marshal only needed for direct send
 		data, err := proto.Marshal(protoMessage)
 		if err != nil {

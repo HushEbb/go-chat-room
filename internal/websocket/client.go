@@ -13,7 +13,7 @@ import (
 
 const (
 	writeWait      = 10 * time.Second    // 写超时
-	pongWait       = 30 * time.Second    // 等待pong的最大时间
+	pongWait       = 60 * time.Second    // 等待pong的最大时间
 	pingPeriod     = (pongWait * 9) / 10 // 发送ping的周期
 	maxMessageSize = 512                 // 消息最大长度
 )

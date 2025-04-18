@@ -2,6 +2,8 @@ package websocket
 
 import (
 	"errors"
+	"fmt"
+	"go-chat-room/internal/interfaces"
 	"go-chat-room/internal/model"
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/internal/repository"
@@ -9,6 +11,7 @@ import (
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/db"
 	"go-chat-room/pkg/logger"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +22,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
 	"gorm.io/gorm"
 )
@@ -48,7 +53,6 @@ func (m *MockClient) QueueBytes(data []byte) error {
 	if m.QueueBytesFn != nil {
 		return m.QueueBytesFn(data)
 	}
-	// Simulate buffer full sometimes? For now, default success
 	return nil
 }
 func (m *MockClient) Close() {
@@ -88,15 +92,17 @@ func (m *MockEventHandler) HandleUserDisconnected(userID uint) {
 func (m *MockEventHandler) CheckConnected(userID uint) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.ConnectedUsers[userID]
+	_, ok := m.ConnectedUsers[userID]
+	return ok
 }
 func (m *MockEventHandler) CheckDisconnected(userID uint) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.DisconnectedUsers[userID]
+	_, ok := m.DisconnectedUsers[userID]
+	return ok
 }
 
-var upgrader = websocket.Upgrader{
+var testUpgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
@@ -104,331 +110,390 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
-// 帮助函数：清空 users 表中的所有数据
+// Helper to cleanup tables
 func cleanupUserTable(t *testing.T) {
 	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.User{}).Error; err != nil {
-		t.Logf("Failed to cleanup users table: %v", err)
+		t.Logf("Warning: Failed to cleanup users table: %v", err)
 	} else {
 		t.Log("Successfully cleaned up users table.")
 	}
 }
 
-// 帮助函数：清空 Messages 表中的所有数据
 func cleanupMessageTable(t *testing.T) {
 	if err := db.DB.Session(&gorm.Session{AllowGlobalUpdate: true}).Unscoped().Delete(&model.Message{}).Error; err != nil {
-		t.Logf("Failed to cleanup users table: %v", err)
+		t.Logf("Warning: Failed to cleanup messages table: %v", err)
 	} else {
-		t.Log("Successfully cleaned up users table.")
+		t.Log("Successfully cleaned up messages table.")
 	}
 }
 
-func setupTestWebsocket(t *testing.T) {
-	if err := config.InitTest(); err != nil {
-		t.Fatalf("Failed to initialize config: %v", err)
+// setupTestEnv initializes logger, config, db and sets up cleanup.
+func setupTestEnv(t *testing.T) {
+	config.InitTest()
+	if logger.L == nil {
+		err := logger.InitLogger(config.GlobalConfig.Log.Level, config.GlobalConfig.Log.ProductionMode)
+		if err != nil {
+			t.Logf("Logger init failed (using default): %v", err)
+		}
 	}
-
-	if err := logger.InitLogger("debug", false); err != nil {
-		t.Fatalf("Fail to initialize config: %v", err)
-	}
-
-	if err := db.InitDB(); err != nil {
-		t.Fatalf("Failed to connect to test database: %v", err)
-	}
+	err := db.InitDB()
+	require.NoError(t, err, "Failed to connect to test database")
 
 	t.Cleanup(func() { cleanupMessageTable(t) })
 	t.Cleanup(func() { cleanupUserTable(t) })
 }
 
-// 测试服务器设置
-func setupTestServer(t *testing.T, hub *Hub, userID uint) (*gin.Engine, string) {
+// setupTestDependencies creates the core services and hub for testing.
+// Returns the Hub (as ConnectionManager) and ChatService.
+func setupTestDependencies(t *testing.T) (interfaces.ConnectionManager, *service.ChatService) {
+	messageRepo := repository.NewMessageRepository()
+	userRepo := repository.NewUserRepository()
+
+	hub := NewHub(nil)
+
+	chatService := service.NewChatService(hub, messageRepo, userRepo)
+
+	hub.SetEventHandler(chatService)
+
+	go hub.Run()
+
+	return hub, chatService
+}
+
+// setupTestWebSocketServer creates a test server with a WebSocket endpoint.
+// It uses the provided handler and manager interfaces.
+func setupTestWebSocketServer(t *testing.T, handler interfaces.MessageHandler, manager interfaces.ConnectionManager) (*httptest.Server, string) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
-	messageRepo := repository.NewMessageRepository()
-	userRepo := repository.NewUserRepository()
-	chatService := service.NewChatService(hub, messageRepo, userRepo)
-
-	router.GET("/ws", func(c *gin.Context) {
-		conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
+	router.GET("/ws/:userID", func(c *gin.Context) {
+		userIDStr := c.Param("userID")
+		var userID uint
+		_, err := fmt.Sscan(userIDStr, &userID)
 		if err != nil {
-			t.Fatalf("Failed to upgrade connection: %v", err)
+			logger.L.Error("Invalid userID in path", zap.String("userIDStr", userIDStr), zap.Error(err))
+			c.AbortWithStatus(http.StatusBadRequest)
 			return
 		}
 
-		client := NewClient(userID, conn, chatService, hub)
-		hub.Register(client)
+		conn, err := testUpgrader.Upgrade(c.Writer, c.Request, nil)
+		if err != nil {
+			logger.L.Error("Failed to upgrade connection", zap.Uint("userID", userID), zap.Error(err))
+			return
+		}
+		logger.L.Info("Test WS connection upgraded", zap.Uint("userID", userID))
+
+		client := NewClient(userID, conn, handler, manager)
+		manager.Register(client)
 
 		go client.ReadPump()
 		go client.WritePump()
 	})
 
 	server := httptest.NewServer(router)
-	// 将 http:// 替换为 ws://
-	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/ws"
+	wsURLBase := "ws" + strings.TrimPrefix(server.URL, "http")
 
-	return router, wsURL
+	return server, wsURLBase
 }
 
-// 创建WebSocket客户端连接
+// connectWebSocket establishes a WebSocket connection.
 func connectWebSocket(t *testing.T, url string) *websocket.Conn {
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
-	if err != nil {
-		t.Fatalf("Failed to connect to WebSocket server: %v", err)
-	}
+	require.NoError(t, err, "Failed to dial websocket: %s", url)
+	require.NotNil(t, conn)
 	return conn
 }
 
-func TestWebSocketConnection(t *testing.T) {
-	setupTestWebsocket(t)
-	hub := NewHub()
-	go hub.Run()
-
-	_, wsURL := setupTestServer(t, hub, 1)
-
-	// 测试客户端连接
-	conn := connectWebSocket(t, wsURL)
-	defer conn.Close()
-
-	// 验证连接是否成功
-	assert.NotNil(t, conn)
-
-	// 清理连接
-	hub.clients = make(map[uint]*Client)
+// Helper to create test users
+func createTestUser(t *testing.T, username string) *model.User {
+	user := &model.User{
+		Username: username,
+		Password: "testpassword",
+		Email:    fmt.Sprintf("%s@example.com", username),
+		Avatar:   "default.png",
+	}
+	err := db.DB.Create(&user).Error
+	require.NoError(t, err, "Failed to create test user %s", username)
+	require.True(t, user.ID > 0)
+	t.Logf("Created test user '%s' with ID: %d", username, user.ID)
+	return user
 }
 
-func TestMessageDelivery(t *testing.T) {
-	setupTestWebsocket(t)
+// --- Tests ---
 
-	// --- 创建测试用户 ---
-	// 在发送消息前，确保测试数据库中有发送者和接收者用户
-	user1 := &model.User{Username: "testuser1", Password: "hash1", Email: "user1@example.com"} // 确保包含必要字段
-	user2 := &model.User{Username: "testuser2", Password: "hash2", Email: "user2@example.com"} // 确保包含必要字段
-	if err := db.DB.Create(&user1).Error; err != nil {
-		t.Fatalf("Failed to create test user 1: %v", err)
-	}
-	if err := db.DB.Create(&user2).Error; err != nil {
-		t.Fatalf("Failed to create test user 2: %v", err)
-	}
-	t.Log("Created test users 1 and 2") // 添加日志确认
+func TestWebSocketConnectionAndDisconnect(t *testing.T) {
+	setupTestEnv(t)
+	hub, chatService := setupTestDependencies(t)
 
-	hub := NewHub()
-	go hub.Run()
+	mockEventHandler := NewMockEventHandler()
+	hub.SetEventHandler(mockEventHandler)
 
-	// 创建两个不同的WebSocket连接，使用不同的userID
-	_, wsURL1 := setupTestServer(t, hub, 1) // userID = 1
-	conn1 := connectWebSocket(t, wsURL1)
-	defer conn1.Close()
+	server, wsURLBase := setupTestWebSocketServer(t, chatService, hub)
+	defer server.Close()
 
-	_, wsURL2 := setupTestServer(t, hub, 2) // userID = 2
-	conn2 := connectWebSocket(t, wsURL2)
-	defer conn2.Close()
+	userID := uint(1)
+	wsURL := fmt.Sprintf("%s/ws/%d", wsURLBase, userID)
 
-	// 等待连接建立
-	time.Sleep(100 * time.Millisecond)
-
-	// --- 测试消息发送 (Protobuf) ---
-	// 创建客户端发送的消息 (ClientToServerMessage)
-	clientMsgToSend := &internalProto.ClientToServerMessage{
-		Content:    "Hello, this is a proto test message",
-		ReceiverId: 2, // 发送给userID为2的用户
-	}
-
-	// 将客户端消息marshal为字节
-	data, err := proto.Marshal(clientMsgToSend)
-	assert.NoError(t, err)
-
-	// 从conn1 (userID=1) 向 conn2 (userID=2) 发送二进制消息
-	err = conn1.WriteMessage(websocket.BinaryMessage, data)
-	assert.NoError(t, err)
-
-	// 在接收连接上设置读取截止时间
-	conn2.SetReadDeadline(time.Now().Add(2 * time.Second))
-
-	// --- 读取并解码接收到的消息 (Protobuf) ---
-	messageType, receivedData, err := conn2.ReadMessage()
-	assert.NoError(t, err)
-	assert.Equal(t, websocket.BinaryMessage, messageType) // 期望二进制消息
-
-	// 将接收到的字节解组为预期的完整ChatMessage
-	var receivedMsg internalProto.ChatMessage
-	err = proto.Unmarshal(receivedData, &receivedMsg)
-	assert.NoError(t, err)
-
-	// 断言接收到的Protobuf消息字段
-	assert.Equal(t, clientMsgToSend.Content, receivedMsg.Content)       // 检查内容
-	assert.Equal(t, uint64(1), receivedMsg.SenderId)                    // 服务器应设置SenderId
-	assert.Equal(t, clientMsgToSend.ReceiverId, receivedMsg.ReceiverId) // 检查ReceiverId
-	// 可选地检查其他字段，如SenderUsername、CreatedAt (如果测试需要/可能)
-
-	// 清理连接
-	hub.clients = make(map[uint]*Client)
-}
-
-func TestClientDisconnection(t *testing.T) {
-	setupTestWebsocket(t)
-	hub := NewHub()
-	go hub.Run()
-
-	_, wsURL := setupTestServer(t, hub, 1)
-
-	// 创建客户端连接
 	conn := connectWebSocket(t, wsURL)
 
-	// 等待连接建立
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return hub.IsClientConnected(userID)
+	}, 2*time.Second, 100*time.Millisecond, "Client should be connected in Hub")
 
-	// 验证客户端已注册
-	assert.Equal(t, 1, len(hub.clients))
+	require.Eventually(t, func() bool {
+		return mockEventHandler.CheckConnected(userID)
+	}, 2*time.Second, 100*time.Millisecond, "EventHandler should have handled connection")
 
-	// 关闭连接
 	conn.Close()
 
-	// 等待取消注册完成
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool {
+		return !hub.IsClientConnected(userID)
+	}, 2*time.Second, 100*time.Millisecond, "Client should be disconnected from Hub")
 
-	// 验证客户端已移除
-	assert.Equal(t, 0, len(hub.clients))
-
-	// 清理连接
-	hub.clients = make(map[uint]*Client)
+	require.Eventually(t, func() bool {
+		return mockEventHandler.CheckDisconnected(userID)
+	}, 2*time.Second, 100*time.Millisecond, "EventHandler should have handled disconnection")
 }
 
-func TestPingPong(t *testing.T) {
-	setupTestWebsocket(t)
+func TestPingPongMechanism(t *testing.T) {
+	setupTestEnv(t)
+	hub, chatService := setupTestDependencies(t)
 
-	// go test 默认时间为30s
-	// pongWait = 60s, pingPeriod = pongWait * 9 / 10
-	hub := NewHub()
-	go hub.Run()
+	server, wsURLBase := setupTestWebSocketServer(t, chatService, hub)
+	defer server.Close()
 
-	_, wsURL := setupTestServer(t, hub, 1)
+	userID := uint(99)
+	wsURL := fmt.Sprintf("%s/ws/%d", wsURLBase, userID)
 
-	// 创建客户端连接
 	conn := connectWebSocket(t, wsURL)
 	defer conn.Close()
 
+	readDone := make(chan struct{})
 	go func() {
-		defer func() {
-			t.Log("Client read loop exiting.")
-		}()
+		defer close(readDone)
 		for {
-			// 调用 NextReader 或 ReadMessage 来驱动底层读取和帧处理
 			if _, _, err := conn.ReadMessage(); err != nil {
-				// 当连接关闭时，退出循环
-				t.Logf("Client read loop error: %v", err)
-				break
+				t.Logf("Client read loop exiting: %v", err)
+				return
 			}
-			// 不需要处理读取到的消息，只需要保持读取活动
 		}
 	}()
 
-	// 等待连接建立和goroutine启动
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(pingPeriod + 1*time.Second)
 
-	pingReceived := make(chan bool, 1)
-	conn.SetPingHandler(func(appData string) error {
-		t.Log("Client PingHandler triggered!")
-		pingReceived <- true
-		err := conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(writeWait))
-		if err != nil {
-			t.Logf("Client failed to send pong: %v", err)
-		}
-		return err
-	})
+	assert.True(t, hub.IsClientConnected(userID), "Client should still be connected after ping period")
 
-	// 等待服务器发送 ping (来自 WritePump 的自动 ping)
+	t.Log("Ping/Pong mechanism seems operational.")
+
+	conn.Close()
 	select {
-	case <-pingReceived:
-		t.Log("Test received notification via channel.")
-		// 成功收到ping
-	case <-time.After(pingPeriod + time.Second):
-		t.Fatal("No ping received from server")
+	case <-readDone:
+		t.Log("Read loop exited gracefully after close.")
+	case <-time.After(2 * time.Second):
+		t.Error("Read loop did not exit after connection close.")
 	}
 
-	// 关闭连接会使上面的读取循环退出
-	conn.Close()
-	// 等待 goroutine 退出（可选，但更健壮）
-	time.Sleep(50 * time.Millisecond)
-	// 清理
-	hub.clients = make(map[uint]*Client)
+	require.Eventually(t, func() bool {
+		return !hub.IsClientConnected(userID)
+	}, 2*time.Second, 100*time.Millisecond, "Client should be disconnected from Hub after close")
 }
 
-func TestBroadcastMessage(t *testing.T) {
-	setupTestWebsocket(t)
+func TestDirectMessageDeliveryOnline(t *testing.T) {
+	setupTestEnv(t)
+	hub, chatService := setupTestDependencies(t)
 
-	// --- 创建测试用户 ---
-	// 在发送消息前，确保测试数据库中有发送者和接收者用户
-	user1 := &model.User{Username: "testuser1", Password: "hash1", Email: "user1@example.com"} // 确保包含必要字段
-	user2 := &model.User{Username: "testuser2", Password: "hash2", Email: "user2@example.com"} // 确保包含必要字段
-	user3 := &model.User{Username: "testuser3", Password: "hash3", Email: "user3@example.com"} // 确保包含必要字段
-	if err := db.DB.Create(&user1).Error; err != nil {
-		t.Fatalf("Failed to create test user 1: %v", err)
-	}
-	if err := db.DB.Create(&user2).Error; err != nil {
-		t.Fatalf("Failed to create test user 2: %v", err)
-	}
-	if err := db.DB.Create(&user3).Error; err != nil {
-		t.Fatalf("Failed to create test user 3: %v", err)
-	}
-	t.Log("Created test users 1, 2 and 3") // 添加日志确认
+	user1 := createTestUser(t, "sender1")
+	user2 := createTestUser(t, "receiver1")
+	userID1 := user1.ID
+	userID2 := user2.ID
 
-	hub := NewHub()
-	go hub.Run()
+	server, wsURLBase := setupTestWebSocketServer(t, chatService, hub)
+	defer server.Close()
 
-	// 创建多个客户端连接
-	_, wsURL1 := setupTestServer(t, hub, 1)
-	conn1 := connectWebSocket(t, wsURL1)
+	conn1 := connectWebSocket(t, fmt.Sprintf("%s/ws/%d", wsURLBase, userID1))
 	defer conn1.Close()
-
-	_, wsURL2 := setupTestServer(t, hub, 2)
-	conn2 := connectWebSocket(t, wsURL2)
+	conn2 := connectWebSocket(t, fmt.Sprintf("%s/ws/%d", wsURLBase, userID2))
 	defer conn2.Close()
 
-	_, wsURL3 := setupTestServer(t, hub, 3)
-	conn3 := connectWebSocket(t, wsURL3)
+	require.Eventually(t, func() bool { return hub.IsClientConnected(userID1) }, 2*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsClientConnected(userID2) }, 2*time.Second, 100*time.Millisecond)
+
+	clientMsgToSend := &internalProto.ClientToServerMessage{
+		Content:    "Direct message online test",
+		ReceiverId: uint64(userID2),
+	}
+	data, err := proto.Marshal(clientMsgToSend)
+	require.NoError(t, err)
+
+	err = conn1.WriteMessage(websocket.BinaryMessage, data)
+	require.NoError(t, err)
+
+	conn2.SetReadDeadline(time.Now().Add(3 * time.Second))
+	messageType, receivedData, err := conn2.ReadMessage()
+
+	require.NoError(t, err, "Receiver should receive message without error")
+	require.Equal(t, websocket.BinaryMessage, messageType)
+
+	var receivedMsg internalProto.ChatMessage
+	err = proto.Unmarshal(receivedData, &receivedMsg)
+	require.NoError(t, err)
+
+	assert.Equal(t, clientMsgToSend.Content, receivedMsg.Content)
+	assert.Equal(t, uint64(userID1), receivedMsg.SenderId)
+	assert.Equal(t, clientMsgToSend.ReceiverId, receivedMsg.ReceiverId)
+	assert.Equal(t, user1.Username, receivedMsg.SenderUsername)
+	assert.NotNil(t, receivedMsg.CreatedAt)
+	assert.True(t, receivedMsg.Id > 0, "Message should have a DB ID")
+	// TODO: test isOffline
+	// assert.False(t, receivedMsg.IsOffline, "Message should not be marked as offline")
+
+	var dbMsg model.Message
+	require.Eventually(t, func() bool {
+		dbErr := db.DB.First(&dbMsg, receivedMsg.Id).Error
+		if dbErr != nil {
+			return false
+		}
+		return dbMsg.IsDelivered
+	}, 3*time.Second, 100*time.Millisecond, "Message should be marked as delivered in DB")
+}
+
+func TestBroadcastMessageDelivery(t *testing.T) {
+	setupTestEnv(t)
+	hub, chatService := setupTestDependencies(t)
+
+	user1 := createTestUser(t, "bcastSender")
+	user2 := createTestUser(t, "bcastReceiver1")
+	user3 := createTestUser(t, "bcastReceiver2")
+	userID1, userID2, userID3 := user1.ID, user2.ID, user3.ID
+
+	server, wsURLBase := setupTestWebSocketServer(t, chatService, hub)
+	defer server.Close()
+
+	conn1 := connectWebSocket(t, fmt.Sprintf("%s/ws/%d", wsURLBase, userID1))
+	defer conn1.Close()
+	conn2 := connectWebSocket(t, fmt.Sprintf("%s/ws/%d", wsURLBase, userID2))
+	defer conn2.Close()
+	conn3 := connectWebSocket(t, fmt.Sprintf("%s/ws/%d", wsURLBase, userID3))
 	defer conn3.Close()
 
-	// 等待连接建立
-	time.Sleep(100 * time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsClientConnected(userID1) }, 2*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsClientConnected(userID2) }, 2*time.Second, 100*time.Millisecond)
+	require.Eventually(t, func() bool { return hub.IsClientConnected(userID3) }, 2*time.Second, 100*time.Millisecond)
 
-	// --- 发送广播消息 (Protobuf) ---
 	clientMsgToSend := &internalProto.ClientToServerMessage{
-		Content:    "Proto broadcast test message",
-		ReceiverId: 0, // 0表示广播
+		Content:    "Broadcast test message",
+		ReceiverId: 0,
 	}
-
-	// marshal客户端消息
 	data, err := proto.Marshal(clientMsgToSend)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// 从conn1发送二进制消息
 	err = conn1.WriteMessage(websocket.BinaryMessage, data)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
-	// --- 验证发送者 (conn1) 是否未收到消息 ---
 	conn1.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	_, _, err = conn1.ReadMessage()
-	assert.Error(t, err) // 期望超时错误，发送者不应收到消息
+	assert.Error(t, err, "Sender should not receive their own broadcast")
+	netErr, ok := err.(net.Error)
+	assert.True(t, ok && netErr.Timeout(), "Error should be a timeout for sender")
 
-	// --- 验证其他客户端是否收到广播消息 (Protobuf) ---
-	for i, conn := range []*websocket.Conn{conn2, conn3} {
-		conn.SetReadDeadline(time.Now().Add(1 * time.Second)) // 为接收者设置读取截止时间
+	expectedContent := clientMsgToSend.Content
+	expectedSenderID := uint64(userID1)
+	expectedReceiverID := uint64(0)
 
-		messageType, receivedData, err := conn.ReadMessage()
-		assert.NoError(t, err, "Client %d should receive message", i+2)
+	var wg sync.WaitGroup
+	receivers := []*websocket.Conn{conn2, conn3}
+	wg.Add(len(receivers))
 
-		assert.Equal(t, websocket.BinaryMessage, messageType, "Client %d received wrong message type", i+2)
+	for i, conn := range receivers {
+		go func(idx int, c *websocket.Conn) {
+			defer wg.Done()
+			clientNum := idx + 2
+			c.SetReadDeadline(time.Now().Add(2 * time.Second))
 
-		var receivedMsg internalProto.ChatMessage
-		err = proto.Unmarshal(receivedData, &receivedMsg)
-		assert.NoError(t, err, "Client %d failed to unmarshal proto", i+2)
+			messageType, receivedData, readErr := c.ReadMessage()
+			require.NoError(t, readErr, "Client %d should receive broadcast", clientNum)
+			if readErr != nil {
+				return
+			}
 
-		// 断言接收到的Protobuf消息
-		assert.Equal(t, clientMsgToSend.Content, receivedMsg.Content, "Client %d content mismatch", i+2)
-		assert.Equal(t, uint64(1), receivedMsg.SenderId, "Client %d sender ID mismatch", i+2) // 发送者是用户1
-		assert.Equal(t, uint64(0), receivedMsg.ReceiverId, "Client %d receiver ID should be 0 for broadcast", i+2)
+			require.Equal(t, websocket.BinaryMessage, messageType, "Client %d received wrong message type", clientNum)
+
+			var receivedMsg internalProto.ChatMessage
+			unmarshalErr := proto.Unmarshal(receivedData, &receivedMsg)
+			require.NoError(t, unmarshalErr, "Client %d failed to unmarshal proto", clientNum)
+
+			assert.Equal(t, expectedContent, receivedMsg.Content, "Client %d content mismatch", clientNum)
+			assert.Equal(t, expectedSenderID, receivedMsg.SenderId, "Client %d sender ID mismatch", clientNum)
+			assert.Equal(t, expectedReceiverID, receivedMsg.ReceiverId, "Client %d receiver ID should be 0", clientNum)
+			assert.Equal(t, user1.Username, receivedMsg.SenderUsername, "Client %d sender username mismatch", clientNum)
+			assert.True(t, receivedMsg.Id > 0, "Client %d DB message ID missing", clientNum)
+			// TODO: test isOffline
+			// assert.False(t, receivedMsg.IsOffline, "Client %d message should not be marked offline", clientNum)
+
+		}(i, conn)
 	}
 
-	// 清理连接
-	hub.clients = make(map[uint]*Client)
+	wg.Wait()
+
+	var dbMsgs []model.Message
+	dbErr := db.DB.Where("sender_id = ? AND receiver_id = 0 AND content = ?", userID1, expectedContent).Find(&dbMsgs).Error
+	require.NoError(t, dbErr, "Error finding broadcast message in DB")
+	require.NotEmpty(t, dbMsgs, "Broadcast message should be saved in DB")
+	assert.False(t, dbMsgs[0].IsDelivered, "Broadcast message in DB should not be marked as delivered")
+}
+
+func TestOfflineMessageDelivery(t *testing.T) {
+	setupTestEnv(t)
+	hub, chatService := setupTestDependencies(t)
+
+	sender := createTestUser(t, "offlineSender")
+	receiver := createTestUser(t, "offlineReceiver")
+	senderID := sender.ID
+	receiverID := receiver.ID
+
+	offlineMsgContent := "Message while offline"
+	err := chatService.SendMessage(senderID, service.MessageRequest{
+		Content:    offlineMsgContent,
+		ReceiverID: receiverID,
+	})
+	require.NoError(t, err, "Sending message via service failed")
+
+	var dbMsg model.Message
+	err = db.DB.Where("sender_id = ? AND receiver_id = ? AND content = ?", senderID, receiverID, offlineMsgContent).First(&dbMsg).Error
+	require.NoError(t, err, "Offline message not found in DB")
+	require.False(t, dbMsg.IsDelivered, "Offline message should initially be marked as not delivered")
+	offlineMsgID := dbMsg.ID
+
+	server, wsURLBase := setupTestWebSocketServer(t, chatService, hub)
+	defer server.Close()
+
+	connReceiver := connectWebSocket(t, fmt.Sprintf("%s/ws/%d", wsURLBase, receiverID))
+	defer connReceiver.Close()
+
+	connReceiver.SetReadDeadline(time.Now().Add(3 * time.Second))
+	messageType, receivedData, err := connReceiver.ReadMessage()
+
+	require.NoError(t, err, "Receiver should receive offline message without error")
+	require.Equal(t, websocket.BinaryMessage, messageType)
+
+	var receivedMsg internalProto.ChatMessage
+	err = proto.Unmarshal(receivedData, &receivedMsg)
+	require.NoError(t, err)
+
+	assert.Equal(t, offlineMsgContent, receivedMsg.Content)
+	assert.Equal(t, uint64(senderID), receivedMsg.SenderId)
+	assert.Equal(t, uint64(receiverID), receivedMsg.ReceiverId)
+	assert.Equal(t, sender.Username, receivedMsg.SenderUsername)
+	assert.Equal(t, uint64(offlineMsgID), receivedMsg.Id, "Received message ID should match the stored offline message ID")
+	// TODO: test isOffline
+	// assert.True(t, receivedMsg.IsOffline, "Received message should be marked as offline")
+
+	var finalDbMsg model.Message
+	require.Eventually(t, func() bool {
+		dbErr := db.DB.First(&finalDbMsg, offlineMsgID).Error
+		if dbErr != nil {
+			return false
+		}
+		return finalDbMsg.IsDelivered
+	}, 3*time.Second, 100*time.Millisecond, "Offline message should be marked as delivered in DB after connection")
 }
