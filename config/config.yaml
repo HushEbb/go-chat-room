@@ -13,3 +13,7 @@ websocket:
   broadcast_buffer_size: 256
   message_retry_count: 3 # 重试次数
   message_retry_interval_ms: 100 # 重试间隔（毫秒）
+
+server:                 # Add this section
+  address: ":8080"      # Address and port to listen on
+  gin_mode: "debug"     # Gin mode: debug, release, test

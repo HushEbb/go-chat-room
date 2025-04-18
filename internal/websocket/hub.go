@@ -93,6 +93,13 @@ func (h *Hub) SendMessageToUser(userID uint, data []byte) (sent bool, err error)
 	return true, nil // 用户在线，排队成功
 }
 
+func (h *Hub) IsClientConnected(userID uint) bool {
+	h.clientsMu.RLock()
+	defer h.clientsMu.RUnlock()
+	_, ok := h.clients[userID]
+	return ok
+}
+
 func (h *Hub) Run() {
 	logger.L.Info("Hub started running")
 	for {
@@ -111,6 +118,10 @@ func (h *Hub) Run() {
 			h.clientsMu.Unlock()
 			logger.L.Info("Client registered", zap.Uint("userID", userID))
 
+			if h.eventHandler != nil {
+				go h.eventHandler.HandleUserConnected(userID)
+			}
+
 		case client := <-h.unregister:
 			// 注销客户端
 			userID := client.GetUserID()
@@ -120,14 +131,15 @@ func (h *Hub) Run() {
 				client.Close()
 				delete(h.clients, userID)
 				logger.L.Info("Client unregistered", zap.Uint("userID", userID))
+				h.clientsMu.Unlock()
 				// 可选地通知事件处理程序有关断开连接的信息
 				if h.eventHandler != nil {
 					go h.eventHandler.HandleUserDisconnected(userID)
 				}
 			} else {
 				logger.L.Debug("Unregister request for non-current or unknown client ignored", zap.Uint("userID", userID))
+				h.clientsMu.Unlock()
 			}
-			h.clientsMu.Unlock()
 
 		case chatMessage := <-h.broadcast: // 现在仅处理 ReceiverID = 0
 			// 消息广播处理
@@ -143,7 +155,7 @@ func (h *Hub) Run() {
 
 			h.clientsMu.RLock()
 			// 创建要发送到的客户端列表，以避免在发送尝试期间保持锁定
-			targets := []interfaces.Client{}
+			targets := make([]interfaces.Client, 0, len(h.clients)-1)
 			for userID, client := range h.clients {
 				if userID != senderID {
 					targets = append(targets, client)

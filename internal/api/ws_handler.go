@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 
+	"go-chat-room/internal/interfaces"
 	internalws "go-chat-room/internal/websocket"
 	"go-chat-room/pkg/logger"
 
@@ -21,14 +22,14 @@ var upgrader = websocket.Upgrader{
 }
 
 type WSHandler struct {
-	hub        internalws.ConnectionManager
-	msgHandler internalws.MessageHandler
+	hub        interfaces.ConnectionManager
+	msgHandler interfaces.MessageHandler
 }
 
-func NewWSHandler(cm internalws.ConnectionManager, mh internalws.MessageHandler) *WSHandler {
+func NewWSHandler(hub interfaces.ConnectionManager, msgHandler interfaces.MessageHandler) *WSHandler {
 	return &WSHandler{
-		hub:        cm,
-		msgHandler: mh,
+		hub:        hub,
+		msgHandler: msgHandler,
 	}
 }
 
@@ -40,15 +41,15 @@ func (h *WSHandler) HandleConnection(c *gin.Context) {
 		return
 	}
 	userID, ok := userIDValue.(uint)
-	if !ok {
-		logger.L.Error("userID in context is not uint", zap.Any("value", userIDValue))
-		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Invalid user ID format in context"})
+	if !ok || userID == 0 {
+		logger.L.Error("Invalid userID type or value in context", zap.Any("userIDValue", userIDValue))
+		c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "Invalid user ID in context"})
 		return
 	}
 
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
 	if err != nil {
-		logger.L.Error("Failed to upgrade connection", zap.Uint("userID", userID), zap.Error(err))
+		logger.L.Error("Failed to upgrade WebSocket connection", zap.Uint("userID", userID), zap.Error(err))
 		return
 	}
 	logger.L.Info("WebSocket connection upgraded", zap.Uint("userID", userID))

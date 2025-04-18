@@ -82,4 +82,17 @@ func (r *MessageRepository) MarkMessageAsDelivered(messageID uint) error {
 }
 
 // 查找特定接收者的未传递消息
-// func (r *MessageRepository) FindUndeliveredMessages(receiverID uint) ([])
+func (r *MessageRepository) FindUndeliveredMessages(receiverID uint) ([]model.Message, error) {
+	var messages []model.Message
+	// 查找接收者的未传递消息，按创建时间排序
+	// TODO: 确保存在 (receiver_id, is_delivered) 上的复合索引
+	err := r.db.Where("receiver_id = ? AND is_delivered = ?", receiverID, false).
+		Order("created_at ASC"). // 首先发送最早的消息
+		// 预加载所需的 Sender 信息
+		Preload("Sender").
+		Find(&messages).Error
+	if err != nil {
+		logger.L.Error("Failed to find undelivered messages", zap.Uint("receiverID", receiverID), zap.Error(err))
+	}
+	return messages, nil
+}

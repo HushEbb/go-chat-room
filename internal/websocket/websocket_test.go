@@ -1,6 +1,7 @@
 package websocket
 
 import (
+	"errors"
 	"go-chat-room/internal/model"
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/internal/repository"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,7 +23,82 @@ import (
 	"gorm.io/gorm"
 )
 
+// --- Mock Implementations ---
+
+// Mock Client for testing Hub directly without real connections
+type MockClient struct {
+	UserIDVal    uint
+	QueueBytesFn func(data []byte) error
+	CloseFn      func()
+	closed       bool
+	mu           sync.Mutex
+}
+
+func NewMockClient(userID uint) *MockClient {
+	return &MockClient{UserIDVal: userID}
+}
+
+func (m *MockClient) GetUserID() uint { return m.UserIDVal }
+func (m *MockClient) QueueBytes(data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("send channel closed")
+	}
+	if m.QueueBytesFn != nil {
+		return m.QueueBytesFn(data)
+	}
+	// Simulate buffer full sometimes? For now, default success
+	return nil
+}
+func (m *MockClient) Close() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if !m.closed {
+		m.closed = true
+		if m.CloseFn != nil {
+			m.CloseFn()
+		}
+	}
+}
+
+// Mock EventHandler
+type MockEventHandler struct {
+	ConnectedUsers    map[uint]bool
+	DisconnectedUsers map[uint]bool
+	mu                sync.Mutex
+}
+
+func NewMockEventHandler() *MockEventHandler {
+	return &MockEventHandler{
+		ConnectedUsers:    make(map[uint]bool),
+		DisconnectedUsers: make(map[uint]bool),
+	}
+}
+func (m *MockEventHandler) HandleUserConnected(userID uint) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.ConnectedUsers[userID] = true
+}
+func (m *MockEventHandler) HandleUserDisconnected(userID uint) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.DisconnectedUsers[userID] = true
+}
+func (m *MockEventHandler) CheckConnected(userID uint) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.ConnectedUsers[userID]
+}
+func (m *MockEventHandler) CheckDisconnected(userID uint) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.DisconnectedUsers[userID]
+}
+
 var upgrader = websocket.Upgrader{
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
@@ -58,8 +135,8 @@ func setupTestWebsocket(t *testing.T) {
 		t.Fatalf("Failed to connect to test database: %v", err)
 	}
 
-	cleanupMessageTable(t)
-	cleanupUserTable(t)
+	t.Cleanup(func() { cleanupMessageTable(t) })
+	t.Cleanup(func() { cleanupUserTable(t) })
 }
 
 // 测试服务器设置

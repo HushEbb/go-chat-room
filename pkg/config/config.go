@@ -14,6 +14,7 @@ type Config struct {
 	Database  DatabaseConfig  `mapstructure:"database"`
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	WebSocket WebSocketConfig `mapstructure:"websocket"`
+	Server    ServerConfig    `mapstructure:"server"`
 }
 
 type LogConfig struct {
@@ -25,6 +26,11 @@ type DatabaseConfig struct {
 	DSN string `mapstructure:"dsn"`
 }
 
+type ServerConfig struct {
+	Address string `mapstructure:"address"`
+	GinMode string `mapstructure:"gin_mode"`
+}
+
 type JWTConfig struct {
 	Secret     string        `mapstructure:"secret"`
 	Expiration time.Duration `mapstructure:"expiration"`
@@ -33,10 +39,8 @@ type JWTConfig struct {
 type WebSocketConfig struct {
 	BroadcastBufferSize int `mapstructure:"broadcast_buffer_size"`
 
-	WriteWaitSeconds int `mapstructure:"write_wait_seconds"`
-	PongWaitSeconds  int `mapstructure:"pong_wait_seconds"`
-	MaxMessageSize   int `mapstructure:"max_message_size"`
 	// 重试相关配置
+	// TODO: still needed?
 	MessageRetryCount      int `mapstructure:"message_retry_count"`
 	MessageRetryIntervalMs int `mapstructure:"message_retry_interval_ms"`
 }

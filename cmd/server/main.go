@@ -16,15 +16,13 @@ import (
 )
 
 func main() {
-	// 初始化配置
+	// --- Initialization ---
 	if err := config.Init(); err != nil {
 		// 在zap可能未初始化的情况下，使用标准日志
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	logLevel := config.GlobalConfig.Log.Level
-	isProduction := config.GlobalConfig.Log.ProductionMode
-	if err := logger.InitLogger(logLevel, isProduction); err != nil {
+	if err := logger.InitLogger(config.GlobalConfig.Log.Level, config.GlobalConfig.Log.ProductionMode); err != nil {
 		// 在zap可能未初始化的情况下，使用标准日志
 		log.Fatalf("Failed to initialize logger: %v", err)
 	}
@@ -35,26 +33,32 @@ func main() {
 		logger.L.Fatal("Failed to initialize database", zap.Error(err))
 	}
 
-	// 创建Gin引擎
-	r := gin.Default()
-	// TODO：考虑使用Gin中间件对请求进行zap日志记录
-
-	// 初始化 Websocket hub
-	hub := websocket.NewHub()
-	go hub.Run()
-
+	// --- Dependency Injection ---
 	// 创建存储库
 	userRepo := repository.NewUserRepository()
 	messageRepo := repository.NewMessageRepository()
+
+	// 初始化 Websocket hub
+	hub := websocket.NewHub(nil)
 
 	// 创建服务
 	authService := service.NewAuthService(userRepo)
 	chatService := service.NewChatService(hub, messageRepo, userRepo)
 
+	hub.SetEventHandler(chatService)
+
+	go hub.Run()
+
 	// 注册API路由
 	authHandler := api.NewAuthHandler(authService)
 	wsHandler := api.NewWSHandler(hub, chatService)
 	chatHandler := api.NewChatHandler(chatService)
+
+	// --- Gin Router Setup ---
+	gin.SetMode(config.GlobalConfig.Server.GinMode)
+	r := gin.New()
+
+	r.Use(middleware.GinZapLogger(), gin.Recovery())
 
 	// WebSocket 连接
 	r.GET("/ws", middleware.AuthMiddleware(), wsHandler.HandleConnection)
@@ -81,8 +85,9 @@ func main() {
 	}
 
 	// 启动服务器
-	logger.L.Info("Starting server on :8080")
-	if err := r.Run(":8080"); err != nil {
+	serverAddr := config.GlobalConfig.Server.Address
+	logger.L.Info("Starting server", zap.String("address", serverAddr))
+	if err := r.Run(serverAddr); err != nil {
 		logger.L.Fatal("Failed to start server", zap.Error(err))
 	}
 }
