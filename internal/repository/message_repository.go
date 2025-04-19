@@ -65,28 +65,43 @@ func (r *MessageRepository) FindMessagesBySenderID(senderID uint, limit, offset 
 	return messages, err
 }
 
+// 获取群聊消息历史
+func (r *MessageRepository) FindMessagesByGroupID(groupID uint, limit, offset int) ([]model.Message, error) {
+	var messages []model.Message
+	err := r.db.Where("group_id = ?", groupID).
+		Order("created_at DESC").
+		Limit(limit).
+		Offset(offset).
+		Preload("Sender").
+		Find(&messages).Error
+	return messages, err
+}
+
 // 删除消息
 func (r *MessageRepository) DeleteMessage(messageID uint) error {
 	return r.db.Delete(&model.Message{}, messageID).Error
 }
 
-// 将消息标记为已传递
+// 将消息标记为已传递 (主要用于私聊)
 func (r *MessageRepository) MarkMessageAsDelivered(messageID uint) error {
 	result := r.db.Model(&model.Message{}).Where("id = ?", messageID).Update("is_delivered", true)
 	if result.Error != nil {
 		logger.L.Error("Failed to mark message as delivered", zap.Uint("messageID", messageID), zap.Error(result.Error))
-	} else if result.RowsAffected == 0 {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
 		logger.L.Warn("Attempted to mark message as delivered, but message not found or already marked", zap.Uint("messageID", messageID))
 	}
-	return result.Error
+	return nil
 }
 
-// 查找特定接收者的未传递消息
+// 查找特定接收者的未传递消息 (主要用于私聊)
 func (r *MessageRepository) FindUndeliveredMessages(receiverID uint) ([]model.Message, error) {
 	var messages []model.Message
 	// 查找接收者的未传递消息，按创建时间排序
 	// TODO: 确保存在 (receiver_id, is_delivered) 上的复合索引
-	err := r.db.Where("receiver_id = ? AND is_delivered = ?", receiverID, false).
+	// 确保只查找私聊消息 (group_id = 0)
+	err := r.db.Where("group_id = 0 AND receiver_id = ? AND is_delivered = ?", receiverID, false).
 		Order("created_at ASC"). // 首先发送最早的消息
 		// 预加载所需的 Sender 信息
 		Preload("Sender").
@@ -96,3 +111,5 @@ func (r *MessageRepository) FindUndeliveredMessages(receiverID uint) ([]model.Me
 	}
 	return messages, nil
 }
+
+// TODO: 可能需要添加删除群组时清理相关消息的方法

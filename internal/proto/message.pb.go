@@ -32,6 +32,7 @@ type ChatMessage struct {
 	CreatedAt      *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	SenderUsername string                 `protobuf:"bytes,6,opt,name=sender_username,json=senderUsername,proto3" json:"sender_username,omitempty"` // 直接包含发送者用户名
 	SenderAvatar   string                 `protobuf:"bytes,7,opt,name=sender_avatar,json=senderAvatar,proto3" json:"sender_avatar,omitempty"`       // 包含发送者头像URL
+	GroupId        uint64                 `protobuf:"varint,8,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`                     // 0 表示非群聊
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -115,12 +116,20 @@ func (x *ChatMessage) GetSenderAvatar() string {
 	return ""
 }
 
+func (x *ChatMessage) GetGroupId() uint64 {
+	if x != nil {
+		return x.GroupId
+	}
+	return 0
+}
+
 // 可选：为来自客户端的消息定义一个更简单的结构
 // 如果它们最初不需要所有字段。
 type ClientToServerMessage struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	ReceiverId    uint64                 `protobuf:"varint,2,opt,name=receiver_id,json=receiverId,proto3" json:"receiver_id,omitempty"` // 0表示广播
+	GroupId       uint64                 `protobuf:"varint,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`          // string type = 3; // 如果客户端指定类型
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -169,11 +178,18 @@ func (x *ClientToServerMessage) GetReceiverId() uint64 {
 	return 0
 }
 
+func (x *ClientToServerMessage) GetGroupId() uint64 {
+	if x != nil {
+		return x.GroupId
+	}
+	return 0
+}
+
 var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
 	"\n" +
-	"\rmessage.proto\x12\x05proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfe\x01\n" +
+	"\rmessage.proto\x12\x05proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x99\x02\n" +
 	"\vChatMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12\x1b\n" +
@@ -183,11 +199,13 @@ const file_message_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12'\n" +
 	"\x0fsender_username\x18\x06 \x01(\tR\x0esenderUsername\x12#\n" +
-	"\rsender_avatar\x18\a \x01(\tR\fsenderAvatar\"R\n" +
+	"\rsender_avatar\x18\a \x01(\tR\fsenderAvatar\x12\x19\n" +
+	"\bgroup_id\x18\b \x01(\x04R\agroupId\"m\n" +
 	"\x15ClientToServerMessage\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x1f\n" +
 	"\vreceiver_id\x18\x02 \x01(\x04R\n" +
-	"receiverIdB\x1dZ\x1bgo-chat-room/internal/protob\x06proto3"
+	"receiverId\x12\x19\n" +
+	"\bgroup_id\x18\x03 \x01(\x04R\agroupIdB\x1dZ\x1bgo-chat-room/internal/protob\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once

@@ -59,7 +59,7 @@ func (r *GroupMemberRepository) FindMember(groupID, userID uint) (*model.GroupMe
 	err := r.db.Where("group_id = ? AND user_id = ?", groupID, userID).First(&member).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			logger.L.Warn("member not found in group", zap.Error(err))
+			logger.L.Warn("member or group not found", zap.Error(err))
 			return nil, nil
 		}
 		return nil, err
