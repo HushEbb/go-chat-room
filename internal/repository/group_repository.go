@@ -39,7 +39,7 @@ func (r *GroupRepository) Create(group *model.Group) error {
 // 根据ID查找群组，并预加载成员和用户信息
 func (r *GroupRepository) FindByID(groupID uint) (*model.Group, error) {
 	var group model.Group
-	err := r.db.Preload("Member").Preload("Member.User").Preload("Owner").First(&group, groupID).Error
+	err := r.db.Preload("Members").Preload("Members.User").Preload("Owner").First(&group, groupID).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil // group not found
@@ -61,13 +61,26 @@ func (r *GroupRepository) FindUserGroups(userID uint) ([]model.Group, error) {
 	return groups, err
 }
 
-// 根据名称查找群组（用于检查名称是否已存在）
-func (r *GroupRepository) FindByName(name string) (*model.Group, error) {
-	var group model.Group
-	err := r.db.Where("name = ?", name).Find(&group).Error
+// 根据名称查找群组
+func (r *GroupRepository) FindByName(name string) ([]model.Group, error) {
+	var groups []model.Group
+	err := r.db.Where("name = ?", name).Find(&groups).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
+		}
+		return nil, err
+	}
+	return groups, nil
+}
+
+// 根据所有者ID和群组名称查找群组
+func (r *GroupRepository) FindByOwnerAndName(ownerID uint, name string) (*model.Group, error) {
+	var group model.Group
+	err := r.db.Where("owner_id = ? AND name = ?", ownerID, name).First(&group).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil // not found
 		}
 		return nil, err
 	}

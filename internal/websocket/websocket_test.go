@@ -148,10 +148,12 @@ func setupTestEnv(t *testing.T) {
 func setupTestDependencies(t *testing.T) (interfaces.ConnectionManager, *service.ChatService) {
 	messageRepo := repository.NewMessageRepository()
 	userRepo := repository.NewUserRepository()
+	groupRepo := repository.NewGroupRepository()
+	groupMemberRepo := repository.NewGroupMemberRepository()
 
 	hub := NewHub(nil)
 
-	chatService := service.NewChatService(hub, messageRepo, userRepo)
+	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo)
 
 	hub.SetEventHandler(chatService)
 

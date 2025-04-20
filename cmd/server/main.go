@@ -37,13 +37,15 @@ func main() {
 	// 创建存储库
 	userRepo := repository.NewUserRepository()
 	messageRepo := repository.NewMessageRepository()
+	groupRepo := repository.NewGroupRepository()
+	groupMemberRepo := repository.NewGroupMemberRepository()
 
 	// 初始化 Websocket hub
 	hub := websocket.NewHub(nil)
 
 	// 创建服务
 	authService := service.NewAuthService(userRepo)
-	chatService := service.NewChatService(hub, messageRepo, userRepo)
+	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo)
 
 	hub.SetEventHandler(chatService)
 
@@ -53,35 +55,57 @@ func main() {
 	authHandler := api.NewAuthHandler(authService)
 	wsHandler := api.NewWSHandler(hub, chatService)
 	chatHandler := api.NewChatHandler(chatService)
+	groupHandler := api.NewGroupHandler(chatService)
 
 	// --- Gin Router Setup ---
 	gin.SetMode(config.GlobalConfig.Server.GinMode)
 	r := gin.New()
-
 	r.Use(middleware.GinZapLogger(), gin.Recovery())
 
 	// WebSocket 连接
 	r.GET("/ws", middleware.AuthMiddleware(), wsHandler.HandleConnection)
 
-	// 聊天相关API
-	chat := r.Group("/api/chat").Use(middleware.AuthMiddleware())
+	// Public API
+	publicAPI := r.Group("/api")
 	{
-		chat.POST("/messages", chatHandler.SendMessage)
-		chat.GET("/messages/:other_user_id", chatHandler.GetChatHistory)
+		authGroup := publicAPI.Group("/auth")
+		{
+			authGroup.POST("/register", authHandler.Register)
+			authGroup.POST("/login", authHandler.Login)
+		}
 	}
 
-	// 公开路由
-	r.POST("/api/auth/register", authHandler.Register)
-	r.POST("/api/auth/login", authHandler.Login)
-
-	// 受保护的路由
-	protected := r.Use(middleware.AuthMiddleware())
+	// Protected API (requires auth)
+	protectedAPI := r.Group("/api")
+	protectedAPI.Use(middleware.AuthMiddleware())
 	{
-		protected.GET("/user/profile", func(c *gin.Context) {
-			user, _ := c.Get("user")
-			logger.L.Debug("Fetching user profile", zap.Any("userContext", user))
-			c.JSON(200, gin.H{"user": user})
-		})
+		// 用户相关
+		userGroup := protectedAPI.Group("/user")
+		{
+			userGroup.GET("/profile", func(c *gin.Context) {
+				user, _ := c.Get("user")
+				logger.L.Debug("Fetching user profile", zap.Any("userContext", user))
+				c.JSON(200, gin.H{"user": user})
+			})
+		}
+
+		// 聊天相关
+		chatGroup := protectedAPI.Group("/chat")
+		{
+			chatGroup.POST("/messages", chatHandler.SendMessage)
+			chatGroup.GET("/messages/:other_user_id", chatHandler.GetChatHistory)
+		}
+
+		// 群组相关
+		groupChatGroup := protectedAPI.Group("/groups")
+		{
+			groupChatGroup.POST("", groupHandler.CreateGroup)
+			groupChatGroup.GET("", groupHandler.GetUserGroups)
+			groupChatGroup.GET("/:group_id", groupHandler.GetGroupInfo)
+			groupChatGroup.POST("/:group_id/members", groupHandler.AddGroupMember)
+			groupChatGroup.DELETE("/:group_id/members/:user_id", groupHandler.RemoveGroupMember)
+			groupChatGroup.GET("/:group_id/messages", groupHandler.GetGroupChatHistory)
+		}
 	}
 
 	// 启动服务器

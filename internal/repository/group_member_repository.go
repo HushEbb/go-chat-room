@@ -79,3 +79,12 @@ func (r *GroupMemberRepository) UpdateMemberRole(groupID, userID uint, newRole s
 	// TODO: 可以在 Service 层添加检查，例如只有 owner 或 admin 可以修改 role
 	return r.db.Model(&model.GroupMember{}).Where("group_id = ? AND user_id = ?", groupID, userID).Update("role", newRole).Error
 }
+
+// 检查用户是否为群组成员
+func (r *GroupMemberRepository) IsGroupMember(groupID, userID uint) (bool, error) {
+	member, err := r.FindMember(groupID, userID)
+	if err != nil {
+		return false, err
+	}
+	return member != nil, nil
+}

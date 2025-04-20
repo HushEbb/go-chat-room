@@ -58,3 +58,12 @@ func (r *UserRepository) FindByID(id uint) (*model.User, error) {
 	}
 	return &user, nil
 }
+
+// 用户是否存在
+func (r *UserRepository) Exists(id uint) (bool, error) {
+	user, err := r.FindByID(id)
+	if err != nil {
+		return false, err
+	}
+	return user != nil, nil
+}

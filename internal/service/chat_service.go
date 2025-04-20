@@ -425,18 +425,17 @@ type CreateGroupRequest struct {
 
 func (s *ChatService) CreateGroup(ownerID uint, req CreateGroupRequest) (*model.Group, error) {
 	// 检查群名是否已存在
-	// TODO: 群名不能重复吗？
-	existing, err := s.groupRepo.FindByName(req.Name)
+	existing, err := s.groupRepo.FindByOwnerAndName(ownerID, req.Name)
 	if err != nil {
 		logger.L.Error("CreateGroup: Failed to check existing group name", zap.String("name", req.Name), zap.Error(err))
 		return nil, fmt.Errorf("failed to check group name validity: %w", err)
 	}
 	if existing != nil {
-		return nil, errors.New("group name already exists")
+		return nil, errors.New("you already have a group with this name")
 	}
 
 	group := &model.Group{
-		Name: req.Name,
+		Name:    req.Name,
 		OwnerID: ownerID,
 	}
 
@@ -455,4 +454,179 @@ func (s *ChatService) CreateGroup(ownerID uint, req CreateGroupRequest) (*model.
 		return group, fmt.Errorf("group created, but failed to fetch details: %w", err)
 	}
 	return createdGroup, nil
+}
+
+func (s *ChatService) GetGroupInfo(groupID, requesterID uint) (*model.Group, error) {
+	// 验证请求者是否为群成员
+	isMember, err := s.groupMemberRepo.IsGroupMember(groupID, requesterID)
+	if err != nil {
+		logger.L.Error("GetGroupInfo: Failed to check membership", zap.Uint("groupID", groupID), zap.Uint("requesterID", requesterID), zap.Error(err))
+		return nil, fmt.Errorf("failed to verify membership: %w", err)
+	}
+	if !isMember {
+		return nil, errors.New("you are not a member of this group")
+	}
+
+	group, err := s.groupRepo.FindByID(groupID)
+	if err != nil {
+		logger.L.Error("GetGroupInfo: Failed to find group by ID", zap.Uint("groupID", groupID), zap.Error(err))
+		return nil, fmt.Errorf("failed to get group info: %w", err)
+	}
+	if group == nil {
+		return nil, errors.New("group not found")
+	}
+	return group, nil
+}
+
+// 获取用户加入的所有群组列表
+func (s *ChatService) GetUserGroups(userID uint) ([]model.Group, error) {
+	groups, err := s.groupRepo.FindUserGroups(userID)
+	if err != nil {
+		logger.L.Error("GetUserGroups: Failed to find user groups", zap.Uint("userID", userID), zap.Error(err))
+		return nil, fmt.Errorf("failed to retrieve user groups: %w", err)
+	}
+	return groups, nil
+}
+
+type AddGroupMemberRequest struct {
+	UserID uint `json:"user_id" binding:"required"`
+}
+
+// 添加成员到群组 (需要权限检查)
+func (s *ChatService) AddGroupMember(groupID, targetUserID, requesterID uint) error {
+	// 检查权限
+	requesterMember, err := s.groupMemberRepo.FindMember(groupID, requesterID)
+	if err != nil || requesterMember == nil {
+		logger.L.Warn("AddGroupMember: Requester not found or not a member", zap.Uint("groupID", groupID), zap.Uint("requesterID", requesterID), zap.Error(err))
+		return errors.New("requester is not a member or group not found")
+	}
+	if requesterMember.Role != "owner" && requesterMember.Role != "admin" {
+		logger.L.Warn("AddGroupMember: Requester lacks permission", zap.Uint("groupID", groupID), zap.Uint("requesterID", requesterID), zap.String("role", requesterMember.Role))
+		return errors.New("only the group owner or admin can add members")
+	}
+
+	// 检查目标用户是否存在
+	targetUserExists, err := s.userRepo.Exists(targetUserID)
+	if err != nil {
+		logger.L.Error("AddGroupMember: Failed to check target user existence", zap.Uint("targetUserID", targetUserID), zap.Error(err))
+		return fmt.Errorf("failed to validate target user: %w", err)
+	}
+	if !targetUserExists {
+		return errors.New("target user does not exist")
+	}
+
+	// 检查目标用户是否已经是成员
+	memberExists, err := s.groupMemberRepo.IsGroupMember(groupID, targetUserID)
+	if err != nil {
+		logger.L.Error("AddGroupMember: Failed to check if target user is already a member", zap.Uint("groupID", groupID), zap.Uint("targetUserID", targetUserID), zap.Error(err))
+		return fmt.Errorf("failed to check existing membership: %w", err)
+	}
+	if !memberExists {
+		return errors.New("user is already a member of this group")
+	}
+
+	// 添加成员
+	if err := s.groupMemberRepo.AddMember(groupID, targetUserID, "member"); err != nil {
+		logger.L.Error("AddGroupMember: Failed to add member in repository", zap.Uint("groupID", groupID), zap.Uint("targetUserID", targetUserID), zap.Error(err))
+		return fmt.Errorf("failed to add member: %w", err)
+	}
+
+	logger.L.Info("User added to group successfully", zap.Uint("groupID", groupID), zap.Uint("targetUserID", targetUserID), zap.Uint("requesterID", requesterID))
+	// TODO: (可选) 向被添加的用户发送通知
+	return nil
+}
+
+// 从群组中移除成员 (需要权限检查)
+func (s *ChatService) RemoveGroupMember(groupID, targetUserID, requesterID uint) error {
+	// 检查请求者和目标用户是否是群组成员
+	requesterMember, err := s.groupMemberRepo.FindMember(groupID, requesterID)
+	if err != nil || requesterMember == nil {
+		return errors.New("requester is not a member or group not found")
+	}
+	targetMember, err := s.groupMemberRepo.FindMember(groupID, targetUserID)
+	if err != nil || targetMember == nil {
+		return errors.New("target user is not a member or group not found")
+	}
+
+	// 权限检查
+	if requesterID == targetUserID {
+		// 自己可以退出，但不能退出自己是群主的群组
+		if targetMember.Role == "owner" {
+			return errors.New("group owner cannot leave the group (consider transferring ownership or deleting the group)")
+		}
+	} else {
+		if requesterMember.Role != "owner" && requesterMember.Role != "admin" {
+			return errors.New("only the group owner or admin can remove other members")
+		}
+		if requesterMember.Role == "admin" && targetMember.Role == "admin" {
+			return errors.New("group admin cannot remove other admins")
+		}
+		if targetMember.Role == "owner" {
+			return errors.New("cannot remove the group owner")
+		}
+	}
+
+	// 移除成员
+	if err := s.groupMemberRepo.RemoveMember(groupID, targetUserID); err != nil {
+		logger.L.Error("RemoveGroupMember: Failed to remove member in repository", zap.Uint("groupID", groupID), zap.Uint("targetUserID", targetUserID), zap.Error(err))
+		return fmt.Errorf("failed to remove member: %w", err)
+	}
+
+	logger.L.Info("User removed from group successfully", zap.Uint("groupID", groupID), zap.Uint("targetUserID", targetUserID), zap.Uint("requesterID", requesterID))
+	// TODO: (可选) 向被移除的用户发送通知
+	return nil
+}
+
+func (s *ChatService) GetGroupChatHistory(groupID, requesterID uint, limit, offset int) ([]*internalProto.ChatMessage, error) {
+	// 验证请求者是否为群组成员
+	isMember, err := s.groupMemberRepo.IsGroupMember(groupID, requesterID)
+	if err != nil {
+		logger.L.Error("GetGroupChatHistory: Failed to check membership", zap.Uint("groupID", groupID), zap.Uint("requesterID", requesterID), zap.Error(err))
+		return nil, fmt.Errorf("failed to verify membership: %w", err)
+	}
+	if !isMember {
+		return nil, errors.New("you are not a member of this group")
+	}
+
+	// 从仓库获取消息
+	dbMessages, err := s.messageRepo.FindMessagesByGroupID(groupID, limit, offset)
+	if err != nil {
+		logger.L.Error("GetGroupChatHistory: Error fetching group messages", zap.Uint("groupID", groupID), zap.Error(err))
+		return nil, fmt.Errorf("failed to retrieve group chat history: %w", err)
+	}
+
+	// 预加载发送者信息 (优化 N+1 查询)
+	userIdsToFetch := make(map[uint]struct{})
+	for _, msg := range dbMessages {
+		userIdsToFetch[msg.SenderID] = struct{}{}
+	}
+	users := make(map[uint]*model.User)
+	for uid := range userIdsToFetch {
+		user, findErr := s.userRepo.FindByID(uid)
+		if findErr == nil && user != nil {
+			users[uid] = user
+		} else {
+			logger.L.Warn("GetGroupChatHistory: Failed to find sender info for history message", zap.Uint("userID", uid), zap.Error(findErr))
+			users[uid] = &model.User{Username: "Unknown", Avatar: "default.png"} // Fallback
+		}
+	}
+
+	// 转换为 Protobuf 格式
+	protoMessages := make([]*internalProto.ChatMessage, 0, len(dbMessages))
+	for _, msg := range dbMessages {
+		sender := users[msg.SenderID]
+		protoMessages = append(protoMessages, &internalProto.ChatMessage{
+			Id:             uint64(msg.ID),
+			Content:        msg.Content,
+			SenderId:       uint64(msg.SenderID),
+			ReceiverId:     0, // 群聊消息 ReceiverId 设为 0
+			GroupId:        uint64(msg.GroupID),
+			SenderUsername: sender.Username,
+			SenderAvatar:   sender.Avatar,
+		})
+	}
+
+	// 消息已按时间倒序排列，如果需要正序，可以在这里反转切片
+
+	return protoMessages, nil
 }
