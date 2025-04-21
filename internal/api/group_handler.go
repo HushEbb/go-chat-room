@@ -163,7 +163,7 @@ func (h *GroupHandler) AddGroupMember(c *gin.Context) {
 		case errMsg == "user is already a member of this group":
 			c.JSON(http.StatusConflict, gin.H{"error": errMsg})
 		default:
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add member" + errMsg})
 		}
 		return
 	}

@@ -521,7 +521,7 @@ func (s *ChatService) AddGroupMember(groupID, targetUserID, requesterID uint) er
 		logger.L.Error("AddGroupMember: Failed to check if target user is already a member", zap.Uint("groupID", groupID), zap.Uint("targetUserID", targetUserID), zap.Error(err))
 		return fmt.Errorf("failed to check existing membership: %w", err)
 	}
-	if !memberExists {
+	if memberExists {
 		return errors.New("user is already a member of this group")
 	}
 

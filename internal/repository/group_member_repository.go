@@ -23,12 +23,52 @@ func (r *GroupMemberRepository) AddMember(groupID, userID uint, role string) err
 	if role == "" {
 		role = "member"
 	}
-	member := &model.GroupMember{
-		GroupID: groupID,
-		UserID:  userID,
-		Role:    role,
-	}
-	return r.db.FirstOrCreate(&member).Error
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var member model.GroupMember
+
+		// 查找成员，包括软删除的
+		err := tx.Unscoped().Where("group_id = ? AND user_id = ?", groupID, userID).First(&member).Error
+
+		if err == nil {
+			if member.DeletedAt.Valid {
+				// 如果是软删除的记录，则恢复并更新角色
+				logger.L.Info("Restoring soft-deleted group member", zap.Uint("groupID", groupID), zap.Uint("userID", userID))
+				// 使用 map 更新确保只更新需要的字段，特别是将 deleted_at 设为 NULL
+				updateData := map[string]interface{}{
+					"role":       role,
+					"deleted_at": nil, // 恢复软删除
+				}
+				if err := tx.Unscoped().Model(&model.GroupMember{}).Where("group_id = ? AND user_id = ?", groupID, userID).Updates(updateData).Error; err != nil {
+					logger.L.Error("Failed to restore soft-deleted member", zap.Error(err))
+					return err // 返回更新错误
+				}
+				return nil // 恢复成功
+			}
+			// 如果不是软删除的 (DeletedAt is NULL)，说明成员已存在且是活动的
+			logger.L.Warn("Attempted to add an already active member", zap.Uint("groupID", groupID), zap.Uint("userID", userID))
+			// 根据业务逻辑，这里可以返回一个特定的错误，表明用户已经是成员
+			// Service 层已经有这个检查，所以理论上不会执行到这里，但作为仓库层可以更健壮
+			return errors.New("user is already an active member of this group")
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 记录完全不存在，创建新纪录
+			logger.L.Info("Creating new group member", zap.Uint("groupID", groupID), zap.Uint("userID", userID))
+			newMember := &model.GroupMember{
+				GroupID: groupID,
+				UserID:  userID,
+				Role:    role,
+			}
+			if err := tx.Create(newMember).Error; err != nil {
+				logger.L.Error("Failed to create new member", zap.Error(err))
+				return err
+			}
+			return nil // 创建成功
+		} else {
+			logger.L.Error("Failed to query group member", zap.Error(err))
+			return err
+		}
+	})
+
 }
 
 // 将用户从群组中移除
@@ -70,7 +110,7 @@ func (r *GroupMemberRepository) FindMember(groupID, userID uint) (*model.GroupMe
 // 获取群组所有成员的ID列表
 func (r *GroupMemberRepository) FindGroupMemberIDs(groupID uint) ([]uint, error) {
 	var userIDs []uint
-	err := r.db.Model(&model.GroupMember{}).Where("groupID = ?", groupID).Pluck("user_id", &userIDs).Error
+	err := r.db.Model(&model.GroupMember{}).Where("group_id = ?", groupID).Pluck("user_id", &userIDs).Error
 	return userIDs, err
 }
 
