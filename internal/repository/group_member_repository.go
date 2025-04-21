@@ -128,3 +128,31 @@ func (r *GroupMemberRepository) IsGroupMember(groupID, userID uint) (bool, error
 	}
 	return member != nil, nil
 }
+
+// 获取用户的所有群组成员关系（包含LastDeliveredMessageID信息）
+func (r *GroupMemberRepository) FindUserMemberships(userID uint) ([]model.GroupMember, error) {
+	var memberships []model.GroupMember
+	err := r.db.Where("user_id = ?", userID).Find(&memberships).Error
+	if err != nil {
+		logger.L.Error("Failed to find user memberships", zap.Uint("userID", userID), zap.Error(err))
+		return nil, err
+	}
+	return memberships, nil
+}
+
+// 更新用户在特定群组中最后接收的消息ID
+func (r *GroupMemberRepository) UpdateLastDeliveredMessageID(groupID, userID, messageID uint) error {
+	err := r.db.Model(&model.GroupMember{}).
+		Where("group_id = ? AND user_id = ? AND last_delivered_message_id < ?",
+			groupID, userID, messageID).
+		Update("last_delivered_message_id", messageID).Error
+	if err != nil {
+		logger.L.Error("Failed to update last delivered message ID",
+			zap.Uint("groupID", groupID),
+			zap.Uint("userID", userID),
+			zap.Uint("messageID", messageID),
+			zap.Error(err))
+		return err
+	}
+	return nil
+}

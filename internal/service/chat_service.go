@@ -8,6 +8,7 @@ import (
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/internal/repository"
 	"go-chat-room/pkg/logger"
+	"sync"
 
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/proto"
@@ -78,7 +79,18 @@ func (s *ChatService) HandleMessage(message []byte, senderID uint) {
 // HandleUserConnected implements interfaces.ConnectionEventHandler.
 // Fetches and sends offline messages when a user connects.
 func (s *ChatService) HandleUserConnected(userID uint) {
-	logger.L.Info("HandleUserConnected: Checking for offline messages", zap.Uint("userID", userID))
+	logger.L.Info("HandleUserConnected: Processing connection", zap.Uint("userID", userID))
+
+	// 处理私聊未读消息
+	go s.sendOfflinePrivateMessages(userID)
+
+	// 处理群聊未读消息
+	go s.sendOfflineGroupMessages(userID)
+}
+
+// 处理私聊未读消息的方法
+func (s *ChatService) sendOfflinePrivateMessages(userID uint) {
+	logger.L.Info("HandleUserConnected: Checking for offline private messages", zap.Uint("userID", userID))
 	messages, err := s.messageRepo.FindUndeliveredMessages(userID)
 	if err != nil {
 		logger.L.Error("HandleUserConnected: Failed to fetch offline messages", zap.Uint("userID", userID), zap.Error(err))
@@ -155,8 +167,145 @@ func (s *ChatService) HandleUserConnected(userID uint) {
 		}
 	}
 	logger.L.Info("HandleUserConnected: Finished processing offline messages", zap.Uint("userID", userID))
-	// TODO: (可选) 在用户连接时，检查是否有未读的群聊消息？
-	// 这通常在客户端请求群聊历史时处理，而不是在连接时推送。
+}
+
+// 处理群聊未读消息
+func (s *ChatService) sendOfflineGroupMessages(userID uint) {
+	// 获取用户所有群组成员关系
+	memberships, err := s.groupMemberRepo.FindUserMemberships(userID)
+	if err != nil {
+		logger.L.Error("HandleUserConnected: Failed to fetch user group memberships",
+			zap.Uint("userID", userID), zap.Error(err))
+		return
+	}
+
+	if len(memberships) == 0 {
+		logger.L.Debug("HandleUserConnected: User not in any groups", zap.Uint("userID", userID))
+		return
+	}
+
+	logger.L.Info("HandleUserConnected: Checking offline messages for groups",
+		zap.Uint("userID", userID), zap.Int("groupCount", len(memberships)))
+
+	// 为每个群组处理未读消息
+	// 使用 WaitGroup 等待所有 goroutine 完成
+	var wg sync.WaitGroup
+	wg.Add(len(memberships))
+
+	// 为每个群组启动一个 goroutine 处理未读消息
+	for _, membership := range memberships {
+		go func(m model.GroupMember) {
+			defer wg.Done()
+
+			groupID := m.GroupID
+			lastDeliveredID := m.LastDeliveredMessageID
+
+			// 获取该群中的未读消息
+			offlineGroupMsgs, err := s.messageRepo.FindGroupMessagesSince(groupID, lastDeliveredID)
+			if err != nil {
+				logger.L.Error("HandleUserConnected: Failed to fetch offline group messages",
+					zap.Uint("userID", userID), zap.Uint("groupID", groupID), zap.Error(err))
+				return
+			}
+
+			if len(offlineGroupMsgs) == 0 {
+				logger.L.Debug("HandleUserConnected: No new offline messages for group",
+					zap.Uint("userID", userID), zap.Uint("groupID", groupID))
+				return
+			}
+
+			logger.L.Info("HandleUserConnected: Found offline group messages",
+				zap.Uint("userID", userID), zap.Uint("groupID", groupID),
+				zap.Int("count", len(offlineGroupMsgs)))
+
+			// 记录当前处理的最后一条消息ID
+			currentLastSentID := lastDeliveredID
+
+			// 发送每条未读消息
+			for _, msg := range offlineGroupMsgs {
+				senderUsername := "Unknown"
+				senderAvatar := "default.png"
+				// 检查 msg.Sender.ID 是否为非零值来判断是否成功预加载
+				if msg.Sender.ID != 0 {
+					senderUsername = msg.Sender.Username
+					senderAvatar = msg.Sender.Avatar
+				} else {
+					sender, findErr := s.userRepo.FindByID(msg.SenderID)
+					if findErr == nil && sender != nil {
+						senderUsername = sender.Username
+						senderAvatar = sender.Avatar
+					} else {
+						logger.L.Warn("HandleUserConnected: Could not find sender info for offline message", zap.Uint("messageID", msg.ID), zap.Uint("senderID", msg.SenderID))
+					}
+				}
+
+				// 创建protobuf消息
+				protoMsg := &internalProto.ChatMessage{
+					Id:             uint64(msg.ID),
+					Content:        msg.Content,
+					SenderId:       uint64(msg.SenderID),
+					ReceiverId:     0, // 群聊消息
+					GroupId:        uint64(msg.GroupID),
+					CreatedAt:      timestamppb.New(msg.CreatedAt),
+					SenderUsername: senderUsername,
+					SenderAvatar:   senderAvatar,
+				}
+
+				data, err := proto.Marshal(protoMsg)
+				if err != nil {
+					logger.L.Error("HandleUserConnected: Failed to marshal offline group message",
+						zap.Uint("messageID", msg.ID), zap.Error(err))
+					continue
+				}
+
+				// 尝试发送消息
+				sent, sendErr := s.hub.SendMessageToUser(userID, data)
+				if sendErr != nil {
+					logger.L.Error("HandleUserConnected: Error sending offline group message",
+						zap.Uint("userID", userID), zap.Uint("groupID", groupID),
+						zap.Uint("messageID", msg.ID), zap.Error(sendErr))
+					break // 遇到错误停止发送
+				} else if sent {
+					logger.L.Info("HandleUserConnected: Successfully sent offline group message",
+						zap.Uint("userID", userID), zap.Uint("groupID", groupID),
+						zap.Uint("messageID", msg.ID))
+					// 更新最后成功发送的消息ID
+					currentLastSentID = msg.ID
+				} else {
+					// 用户可能断开连接
+					logger.L.Warn("HandleUserConnected: User disconnected during group message delivery",
+						zap.Uint("userID", userID), zap.Uint("groupID", groupID))
+					break
+				}
+			}
+
+			// 如果成功发送了消息，更新LastDeliveredMessageID
+			if currentLastSentID > lastDeliveredID {
+				if err := s.groupMemberRepo.UpdateLastDeliveredMessageID(
+					groupID, userID, currentLastSentID); err != nil {
+					logger.L.Error("HandleUserConnected: Failed to update last delivered message ID",
+						zap.Uint("userID", userID), zap.Uint("groupID", groupID),
+						zap.Error(err))
+				} else {
+					logger.L.Info("HandleUserConnected Goroutine: Updated last delivered message ID",
+						zap.Uint("userID", userID),
+						zap.Uint("groupID", groupID),
+						zap.Uint("newLastID", currentLastSentID))
+				}
+			} else {
+				logger.L.Debug("HandleUserConnected Goroutine: No new messages successfully sent for group, skipping DB update",
+					zap.Uint("userID", userID),
+					zap.Uint("groupID", groupID),
+					zap.Uint("lastDeliveredID", lastDeliveredID))
+			}
+		}(membership)
+	}
+
+	// 等待所有 goroutine 完成
+	wg.Wait()
+
+	logger.L.Info("HandleUserConnected: Finished processing offline group messages",
+		zap.Uint("userID", userID))
 }
 
 // HandleUserDisconnected implements interfaces.ConnectionEventHandler.
@@ -311,9 +460,18 @@ func (s *ChatService) SendMessage(senderID uint, req MessageRequest) error {
 					zap.Error(sendErr))
 			} else if sent {
 				sentCount++
-				// 注意：对于群聊，我们通常不在这里标记 IsDelivered。
-				// IsDelivered 更适用于私聊的离线->在线转换。
-				// TODO: 群聊的已读状态需要单独的机制。
+				logger.L.Debug("SendMessage: Sent group message to online member",
+					zap.Uint("messageID", dbMessage.ID),
+					zap.Uint("memberID", memberID))
+
+				// 为发送成功的成员更新LastDeliveredMessageID
+				go func(gID, uID, msgID uint) {
+					if err := s.groupMemberRepo.UpdateLastDeliveredMessageID(gID, uID, msgID); err != nil {
+						logger.L.Error("SendMessage: Failed to update LastDeliveredMessageID",
+							zap.Uint("groupID", gID), zap.Uint("userID", uID),
+							zap.Uint("messageID", msgID), zap.Error(err))
+					}
+				}(req.GroupID, memberID, dbMessage.ID)
 			} else {
 				logger.L.Debug("SendMessage: Group member offline",
 					zap.Uint("dbMessageID", dbMessage.ID),

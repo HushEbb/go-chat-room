@@ -112,4 +112,21 @@ func (r *MessageRepository) FindUndeliveredMessages(receiverID uint) ([]model.Me
 	return messages, nil
 }
 
+// 获取特定群组中某个消息ID之后的所有消息
+func (r *MessageRepository) FindGroupMessagesSince(groupID, lastMessageID uint) ([]model.Message, error) {
+	var messages []model.Message
+	err := r.db.Where("group_id = ? AND id > ?", groupID, lastMessageID).
+		Order("created_at ASC").
+		Preload("Sender").
+		Find(&messages).Error
+
+	if err != nil {
+		logger.L.Error("Failed to find group messages since",
+			zap.Uint("groupID", groupID),
+			zap.Uint("lastMessageID", lastMessageID),
+			zap.Error(err))
+	}
+	return messages, err
+}
+
 // TODO: 可能需要添加删除群组时清理相关消息的方法
