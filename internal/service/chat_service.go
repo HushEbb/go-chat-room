@@ -8,6 +8,8 @@ import (
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/internal/repository"
 	"go-chat-room/pkg/logger"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -45,6 +47,17 @@ type MessageRequest struct {
 	GroupID    uint   `json:"group_id"`
 }
 
+// FileMessageRequest 表示带文件的消息请求
+type FileMessageRequest struct {
+	Content    string `json:"content"`                    // 可选的消息内容/说明
+	ReceiverID uint   `json:"receiver_id"`                // 私聊接收者ID，群聊为0
+	GroupID    uint   `json:"group_id"`                   // 群聊ID，私聊为0
+	FileID     string `json:"file_id" binding:"required"` // 已上传文件的ID
+	FileType   string `json:"file_type"`                  // 文件类型："image"、"document"等
+	FileName   string `json:"file_name"`                  // 原始文件名
+	FileSize   int64  `json:"file_size"`                  // 文件大小（字节）
+}
+
 func (s *ChatService) HandleMessage(message []byte, senderID uint) {
 	logger.L.Debug("HandleMessage called by WebSocket client", zap.Uint("senderID", senderID))
 
@@ -53,6 +66,11 @@ func (s *ChatService) HandleMessage(message []byte, senderID uint) {
 		logger.L.Error("Failed to unmarshal ClientToServerMessage from WebSocket",
 			zap.Uint("senderID", senderID),
 			zap.Error(err))
+		return
+	}
+
+	if clientMsg.FileId != "" {
+		s.HandleFileMessage(message, senderID)
 		return
 	}
 
@@ -73,6 +91,232 @@ func (s *ChatService) HandleMessage(message []byte, senderID uint) {
 			zap.Uint("senderID", senderID),
 			zap.Uint("receiverID", req.ReceiverID),
 			zap.Uint("groupID", req.GroupID))
+	}
+}
+
+// SendFileMessage 发送带文件的消息
+func (s *ChatService) SendFileMessage(senderID uint, req FileMessageRequest) error {
+	// 获取发送者信息
+	sender, err := s.userRepo.FindByID(senderID)
+	if err != nil || sender == nil {
+		logger.L.Warn("SendFileMessage: Failed to find sender", zap.Uint("senderID", senderID), zap.Error(err))
+		sender = &model.User{Username: "Unknown", Avatar: "default.png"} // 占位符
+	}
+
+	var dbMessage *model.Message
+	var targetUserIDs []uint
+
+	// 根据GroupID或ReceiverID确定目标用户
+	if req.GroupID > 0 {
+		// 群聊消息
+		member, err := s.groupMemberRepo.FindMember(req.GroupID, senderID)
+		if err != nil {
+			return fmt.Errorf("failed to verify group membership: %w", err)
+		}
+		if member == nil {
+			return errors.New("sender is not a member of the group")
+		}
+
+		memberIDs, err := s.groupMemberRepo.FindGroupMemberIDs(req.GroupID)
+		if err != nil {
+			return fmt.Errorf("failed to get group members: %w", err)
+		}
+		if len(memberIDs) == 0 {
+			return errors.New("group has no members")
+		}
+		targetUserIDs = memberIDs
+
+		// 创建数据库消息
+		dbMessage = &model.Message{
+			Content:    req.Content,
+			SenderID:   senderID,
+			GroupID:    req.GroupID,
+			ReceiverID: 0,
+			FileType:   req.FileType,
+			FileName:   req.FileName,
+			FilePath:   req.FileID, // 在FilePath字段中存储fileID
+			FileSize:   req.FileSize,
+		}
+	} else if req.ReceiverID > 0 {
+		// 私聊消息
+		receiver, err := s.userRepo.FindByID(req.ReceiverID)
+		if err != nil {
+			return fmt.Errorf("failed to validate receiver: %w", err)
+		}
+		if receiver == nil {
+			return errors.New("receiver user does not exist")
+		}
+		targetUserIDs = []uint{req.ReceiverID}
+
+		// 创建数据库消息
+		dbMessage = &model.Message{
+			Content:    req.Content,
+			SenderID:   senderID,
+			ReceiverID: req.ReceiverID,
+			GroupID:    0,
+			FileType:   req.FileType,
+			FileName:   req.FileName,
+			FilePath:   req.FileID, // 在FilePath字段中存储fileID
+			FileSize:   req.FileSize,
+		}
+	} else {
+		return errors.New("message must have either a valid group_id or receiver_id")
+	}
+
+	// 保存消息到数据库
+	if err := s.messageRepo.Create(dbMessage); err != nil {
+		logger.L.Error("Error saving file message to DB", zap.Uint("senderID", senderID), zap.Error(err))
+		return fmt.Errorf("failed to save message: %w", err)
+	}
+
+	// 构造文件URL
+	fileURL := fmt.Sprintf("/api/files/%s", req.FileID)
+
+	// 创建protobuf消息
+	protoMessage := &internalProto.ChatMessage{
+		Id:             uint64(dbMessage.ID),
+		Content:        dbMessage.Content,
+		SenderId:       uint64(senderID),
+		ReceiverId:     uint64(dbMessage.ReceiverID),
+		GroupId:        uint64(dbMessage.GroupID),
+		CreatedAt:      timestamppb.New(dbMessage.CreatedAt),
+		SenderUsername: sender.Username,
+		SenderAvatar:   sender.Avatar,
+		FileType:       req.FileType,
+		FileName:       req.FileName,
+		FileUrl:        fileURL,
+		FileSize:       req.FileSize,
+	}
+
+	// 序列化消息
+	data, err := proto.Marshal(protoMessage)
+	if err != nil {
+		logger.L.Error("SendFileMessage: Failed to marshal message", zap.Error(err))
+		return nil // 消息已保存但无法实时发送
+	}
+
+	// 分发消息（类似于SendMessage）
+	if req.GroupID > 0 {
+		// 群聊消息分发
+		for _, memberID := range targetUserIDs {
+			if memberID == senderID {
+				continue // 不发给自己
+			}
+
+			sent, sendErr := s.hub.SendMessageToUser(memberID, data)
+			if sendErr != nil {
+				logger.L.Warn("SendFileMessage: Error sending to member",
+					zap.Uint("memberID", memberID), zap.Error(sendErr))
+				continue
+			}
+
+			if sent {
+				// 更新群组成员的LastDeliveredMessageID
+				go func(gID, uID, msgID uint) {
+					if err := s.groupMemberRepo.UpdateLastDeliveredMessageID(gID, uID, msgID); err != nil {
+						logger.L.Error("SendFileMessage: Failed to update LastDeliveredMessageID",
+							zap.Uint("groupID", gID), zap.Uint("userID", uID), zap.Error(err))
+					}
+				}(req.GroupID, memberID, dbMessage.ID)
+			}
+		}
+	} else {
+		// 私聊消息发送
+		sent, sendErr := s.hub.SendMessageToUser(req.ReceiverID, data)
+		if sendErr != nil {
+			logger.L.Error("SendFileMessage: Error sending direct message", zap.Error(err))
+			return nil // 消息已保存，但发送失败
+		}
+
+		if sent {
+			go func(messageID uint) {
+				if err := s.messageRepo.MarkMessageAsDelivered(messageID); err != nil {
+					logger.L.Error("SendFileMessage: Failed to mark as delivered", zap.Uint("messageID", messageID), zap.Error(err))
+				}
+			}(dbMessage.ID)
+		}
+	}
+
+	return nil
+}
+
+// 在HandleMessage方法中处理文件消息
+func (s *ChatService) HandleFileMessage(message []byte, senderID uint) {
+	logger.L.Debug("HandleFileMessage called by WebSocket client", zap.Uint("senderID", senderID))
+
+	var clientMsg internalProto.ClientToServerMessage
+	if err := proto.Unmarshal(message, &clientMsg); err != nil {
+		logger.L.Error("Failed to unmarshal ClientToServerMessage", zap.Error(err))
+		return
+	}
+
+	// 检查是否包含fileID
+	if clientMsg.FileId == "" {
+		logger.L.Error("HandleFileMessage: Missing fileID in request")
+		return
+	}
+
+	// 从文件服务获取文件信息
+	fileService, err := NewFileService()
+	if err != nil {
+		logger.L.Error("HandleFileMessage: Failed to create file service", zap.Error(err))
+		return
+	}
+
+	// 获取发送者文件路径
+	filePath, err := fileService.GetFilePath(senderID, clientMsg.FileId)
+	if err != nil {
+		logger.L.Error("HandleFileMessage: Failed to get file path",
+			zap.String("fileID", clientMsg.FileId),
+			zap.Uint("senderID", senderID),
+			zap.Error(err))
+		return
+	}
+
+	// 获取文件详细信息
+	fileInfo, err := fileService.GetFileInfo(filePath)
+	if err != nil {
+		logger.L.Error("HandleFileMessage: Failed to get file info",
+			zap.String("filePath", filePath),
+			zap.Error(err))
+		return
+	}
+
+	// 确定文件类型分类
+	fileType := "document" // 默认
+	extension := strings.ToLower(filepath.Ext(fileInfo.Name))
+	switch extension {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		fileType = "image"
+	case ".mp3", ".wav", ".ogg", ".flac", ".aac":
+		fileType = "audio"
+	case ".mp4", ".avi", ".mov", ".wmv", ".mkv", ".webm":
+		fileType = "video"
+	case ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx":
+		fileType = "document"
+	case ".zip", ".rar", ".7z", ".tar", ".gz":
+		fileType = "archive"
+	}
+
+	// 创建并发送文件消息
+	req := FileMessageRequest{
+		Content:    clientMsg.Content,
+		ReceiverID: uint(clientMsg.ReceiverId),
+		GroupID:    uint(clientMsg.GroupId),
+		FileID:     clientMsg.FileId,
+		FileType:   fileType,
+		FileName:   fileInfo.Name,
+		FileSize:   fileInfo.Size,
+	}
+
+	if err := s.SendFileMessage(senderID, req); err != nil {
+		logger.L.Error("Error sending file message", zap.Error(err))
+	} else {
+		logger.L.Info("File message sent successfully",
+			zap.String("fileID", clientMsg.FileId),
+			zap.String("fileName", fileInfo.Name),
+			zap.String("fileType", fileType),
+			zap.Int64("fileSize", fileInfo.Size))
 	}
 }
 
@@ -130,6 +374,11 @@ func (s *ChatService) sendOfflinePrivateMessages(userID uint) {
 			CreatedAt:      timestamppb.New(msg.CreatedAt),
 			SenderUsername: senderUsername,
 			SenderAvatar:   senderAvatar,
+
+			FileType: msg.FileType,
+			FileName: msg.FileName,
+			FileUrl:  fmt.Sprintf("/api/files/%s", msg.FilePath), // 文件ID存在FilePath字段中
+			FileSize: msg.FileSize,
 			// TODO:
 			// IsOffline:      true, // Indicate this was an offline message
 		}
@@ -249,6 +498,11 @@ func (s *ChatService) sendOfflineGroupMessages(userID uint) {
 					CreatedAt:      timestamppb.New(msg.CreatedAt),
 					SenderUsername: senderUsername,
 					SenderAvatar:   senderAvatar,
+
+					FileType: msg.FileType,
+					FileName: msg.FileName,
+					FileUrl:  fmt.Sprintf("/api/files/%s", msg.FilePath), // 文件ID存在FilePath字段中
+					FileSize: msg.FileSize,
 				}
 
 				data, err := proto.Marshal(protoMsg)

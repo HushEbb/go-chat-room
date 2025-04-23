@@ -8,24 +8,31 @@ option go_package = "go-chat-room/internal/proto"; // Go生成代码的包路径
 
 // WebSocket通信的消息结构
 message ChatMessage {
-    uint64 id = 1; // 对应于model.Message.ID (使用uint64以获得更广泛的兼容性)
-    string content = 2;
-    uint64 sender_id = 3;
-    uint64 receiver_id = 4; // 0表示广播
-    google.protobuf.Timestamp created_at = 5;
-    string sender_username = 6; // 直接包含发送者用户名
-    string sender_avatar = 7;   // 包含发送者头像URL
-    uint64 group_id = 8; // 0 表示非群聊
-    // 根据需要添加其他字段，例如，消息类型(文本、图像)、状态(已发送、已送达)
-    // string type = 8;
-    // string status = 9;
+  uint64 id = 1; // 对应于model.Message.ID (使用uint64以获得更广泛的兼容性)
+  string content = 2;
+  uint64 sender_id = 3;
+  uint64 receiver_id = 4; // 0表示广播
+  google.protobuf.Timestamp created_at = 5;
+  string sender_username = 6; // 直接包含发送者用户名
+  string sender_avatar = 7;   // 包含发送者头像URL
+  uint64 group_id = 8;        // 0 表示非群聊
+  // 根据需要添加其他字段，例如，消息类型(文本、图像)、状态(已发送、已送达)
+  // string type = 8;
+  // string status = 9;
+
+  string file_type = 9;  // 例如："image"、"document"等
+  string file_name = 10; // 原始文件名
+  string file_url = 11;  // 文件访问URL
+  int64 file_size = 12;  // 文件大小（字节）
 }
 
 // 可选：为来自客户端的消息定义一个更简单的结构
 // 如果它们最初不需要所有字段。
 message ClientToServerMessage {
-    string content = 1;
-    uint64 receiver_id = 2; // 0表示广播
-    uint64 group_id = 3;
-    // string type = 3; // 如果客户端指定类型
+  string content = 1;
+  uint64 receiver_id = 2; // 0表示广播
+  uint64 group_id = 3;
+  // string type = 3; // 如果客户端指定类型
+
+  string file_id = 4; // 已上传文件的ID引用
 }

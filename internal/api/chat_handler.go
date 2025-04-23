@@ -101,3 +101,56 @@ func (h *ChatHandler) GetChatHistory(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{"messages": messages})
 }
+
+// SendFileMessage 处理通过HTTP API发送文件消息的请求
+func (h *ChatHandler) SendFileMessage(c *gin.Context) {
+	// 从上下文中获取发送者ID（由认证中间件设置）
+	senderIDValue, exists := c.Get("userID")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "user not authenticated"})
+		return
+	}
+
+	senderID, ok := senderIDValue.(uint)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "invalid userID in context"})
+		return
+	}
+
+	// 解析请求体
+	var req service.FileMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.L.Warn("Failed to bind SendFileMessage request", zap.Error(err))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid request body: " + err.Error()})
+		return
+	}
+
+	// 验证文件ID存在
+	if req.FileID == "" {
+		logger.L.Warn("SendFileMessage: Missing file ID", zap.Uint("senderID", senderID))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file_id is required"})
+		return
+	}
+
+	// 验证接收者或群组ID有效
+	if req.ReceiverID == 0 && req.GroupID == 0 {
+		logger.L.Warn("SendFileMessage: Missing target", zap.Uint("senderID", senderID))
+		c.JSON(http.StatusBadRequest, gin.H{"error": "either receiver_id or group_id is required"})
+		return
+	}
+
+	// 调用服务发送文件消息
+	if err := h.chatService.SendFileMessage(senderID, req); err != nil {
+		logger.L.Error("Error sending file message via ChatService",
+			zap.Error(err),
+			zap.Uint("senderID", senderID),
+			zap.String("fileID", req.FileID))
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, gin.H{
+		"message": "file message sent successfully",
+		"file_id": req.FileID,
+	})
+}

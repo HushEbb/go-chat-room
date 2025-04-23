@@ -17,3 +17,7 @@ websocket:
 server:                 # Add this section
   address: ":8080"      # Address and port to listen on
   gin_mode: "debug"     # Gin mode: debug, release, test
+
+file:
+  storage_path: "uploads"  # 文件存储目录
+  max_file_size: 52428800  # 50MB (50 * 1024 * 1024 字节)

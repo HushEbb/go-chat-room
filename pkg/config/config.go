@@ -15,6 +15,7 @@ type Config struct {
 	JWT       JWTConfig       `mapstructure:"jwt"`
 	WebSocket WebSocketConfig `mapstructure:"websocket"`
 	Server    ServerConfig    `mapstructure:"server"`
+	File      *FileConfig     `mapstructure:"file"`
 }
 
 type LogConfig struct {
@@ -43,6 +44,12 @@ type WebSocketConfig struct {
 	// TODO: still needed?
 	MessageRetryCount      int `mapstructure:"message_retry_count"`
 	MessageRetryIntervalMs int `mapstructure:"message_retry_interval_ms"`
+}
+
+// FileConfig 文件上传和存储相关配置
+type FileConfig struct {
+	StoragePath string `mapstructure:"storage_path"`  // 文件存储路径
+	MaxFileSize int64  `mapstructure:"max_file_size"` // 最大文件大小（字节）
 }
 
 var GlobalConfig Config

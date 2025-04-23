@@ -33,6 +33,10 @@ type ChatMessage struct {
 	SenderUsername string                 `protobuf:"bytes,6,opt,name=sender_username,json=senderUsername,proto3" json:"sender_username,omitempty"` // 直接包含发送者用户名
 	SenderAvatar   string                 `protobuf:"bytes,7,opt,name=sender_avatar,json=senderAvatar,proto3" json:"sender_avatar,omitempty"`       // 包含发送者头像URL
 	GroupId        uint64                 `protobuf:"varint,8,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`                     // 0 表示非群聊
+	FileType       string                 `protobuf:"bytes,9,opt,name=file_type,json=fileType,proto3" json:"file_type,omitempty"`                   // 例如："image"、"document"等
+	FileName       string                 `protobuf:"bytes,10,opt,name=file_name,json=fileName,proto3" json:"file_name,omitempty"`                  // 原始文件名
+	FileUrl        string                 `protobuf:"bytes,11,opt,name=file_url,json=fileUrl,proto3" json:"file_url,omitempty"`                     // 文件访问URL
+	FileSize       int64                  `protobuf:"varint,12,opt,name=file_size,json=fileSize,proto3" json:"file_size,omitempty"`                 // 文件大小（字节）
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -123,6 +127,34 @@ func (x *ChatMessage) GetGroupId() uint64 {
 	return 0
 }
 
+func (x *ChatMessage) GetFileType() string {
+	if x != nil {
+		return x.FileType
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetFileName() string {
+	if x != nil {
+		return x.FileName
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetFileUrl() string {
+	if x != nil {
+		return x.FileUrl
+	}
+	return ""
+}
+
+func (x *ChatMessage) GetFileSize() int64 {
+	if x != nil {
+		return x.FileSize
+	}
+	return 0
+}
+
 // 可选：为来自客户端的消息定义一个更简单的结构
 // 如果它们最初不需要所有字段。
 type ClientToServerMessage struct {
@@ -130,6 +162,7 @@ type ClientToServerMessage struct {
 	Content       string                 `protobuf:"bytes,1,opt,name=content,proto3" json:"content,omitempty"`
 	ReceiverId    uint64                 `protobuf:"varint,2,opt,name=receiver_id,json=receiverId,proto3" json:"receiver_id,omitempty"` // 0表示广播
 	GroupId       uint64                 `protobuf:"varint,3,opt,name=group_id,json=groupId,proto3" json:"group_id,omitempty"`          // string type = 3; // 如果客户端指定类型
+	FileId        string                 `protobuf:"bytes,4,opt,name=file_id,json=fileId,proto3" json:"file_id,omitempty"`              // 已上传文件的ID引用
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -185,11 +218,18 @@ func (x *ClientToServerMessage) GetGroupId() uint64 {
 	return 0
 }
 
+func (x *ClientToServerMessage) GetFileId() string {
+	if x != nil {
+		return x.FileId
+	}
+	return ""
+}
+
 var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
 	"\n" +
-	"\rmessage.proto\x12\x05proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x99\x02\n" +
+	"\rmessage.proto\x12\x05proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x8b\x03\n" +
 	"\vChatMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\x04R\x02id\x12\x18\n" +
 	"\acontent\x18\x02 \x01(\tR\acontent\x12\x1b\n" +
@@ -200,12 +240,18 @@ const file_message_proto_rawDesc = "" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12'\n" +
 	"\x0fsender_username\x18\x06 \x01(\tR\x0esenderUsername\x12#\n" +
 	"\rsender_avatar\x18\a \x01(\tR\fsenderAvatar\x12\x19\n" +
-	"\bgroup_id\x18\b \x01(\x04R\agroupId\"m\n" +
+	"\bgroup_id\x18\b \x01(\x04R\agroupId\x12\x1b\n" +
+	"\tfile_type\x18\t \x01(\tR\bfileType\x12\x1b\n" +
+	"\tfile_name\x18\n" +
+	" \x01(\tR\bfileName\x12\x19\n" +
+	"\bfile_url\x18\v \x01(\tR\afileUrl\x12\x1b\n" +
+	"\tfile_size\x18\f \x01(\x03R\bfileSize\"\x86\x01\n" +
 	"\x15ClientToServerMessage\x12\x18\n" +
 	"\acontent\x18\x01 \x01(\tR\acontent\x12\x1f\n" +
 	"\vreceiver_id\x18\x02 \x01(\x04R\n" +
 	"receiverId\x12\x19\n" +
-	"\bgroup_id\x18\x03 \x01(\x04R\agroupIdB\x1dZ\x1bgo-chat-room/internal/protob\x06proto3"
+	"\bgroup_id\x18\x03 \x01(\x04R\agroupId\x12\x17\n" +
+	"\afile_id\x18\x04 \x01(\tR\x06fileIdB\x1dZ\x1bgo-chat-room/internal/protob\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once

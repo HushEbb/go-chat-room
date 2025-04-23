@@ -46,6 +46,10 @@ func main() {
 	// 创建服务
 	authService := service.NewAuthService(userRepo)
 	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo)
+	fileService, err := service.NewFileService()
+	if err != nil {
+		logger.L.Fatal("Failed to initialize file service", zap.Error(err))
+	}
 
 	hub.SetEventHandler(chatService)
 
@@ -56,6 +60,7 @@ func main() {
 	wsHandler := api.NewWSHandler(hub, chatService)
 	chatHandler := api.NewChatHandler(chatService)
 	groupHandler := api.NewGroupHandler(chatService)
+	fileHandler := api.NewFileHandler(fileService, chatService)
 
 	// --- Gin Router Setup ---
 	gin.SetMode(config.GlobalConfig.Server.GinMode)
@@ -106,6 +111,16 @@ func main() {
 			groupChatGroup.DELETE("/:group_id/members/:user_id", groupHandler.RemoveGroupMember)
 			groupChatGroup.GET("/:group_id/messages", groupHandler.GetGroupChatHistory)
 		}
+
+		// 文件相关路由
+		fileRoutes := protectedAPI.Group("/files")
+		{
+			fileRoutes.POST("/upload", fileHandler.UploadFile)
+			fileRoutes.GET("/:file_id", fileHandler.DownloadFile)
+		}
+
+		// 添加文件消息API
+		protectedAPI.POST("/messages/file", chatHandler.SendFileMessage)
 	}
 
 	// 启动服务器
