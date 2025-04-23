@@ -45,11 +45,11 @@ func main() {
 
 	// 创建服务
 	authService := service.NewAuthService(userRepo)
-	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo)
 	fileService, err := service.NewFileService()
 	if err != nil {
 		logger.L.Fatal("Failed to initialize file service", zap.Error(err))
 	}
+	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo, fileService)
 
 	hub.SetEventHandler(chatService)
 

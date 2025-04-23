@@ -118,6 +118,8 @@ func (s *FileService) GetFilePath(userID uint, fileID string) (string, error) {
 	// 列出用户目录中的文件
 	entries, err := os.ReadDir(userPath)
 	if err != nil {
+		logger.L.Error("failed to read user directory",
+			zap.Uint("userID", userID), zap.String("fileID", fileID), zap.Error(err))
 		return "", fmt.Errorf("failed to read user directory: %w", err)
 	}
 
@@ -128,6 +130,7 @@ func (s *FileService) GetFilePath(userID uint, fileID string) (string, error) {
 		}
 	}
 
+	logger.L.Error("file not found", zap.Uint("userID", userID), zap.String("fileID", fileID), zap.Error(err))
 	return "", fmt.Errorf("file not found: %s", fileID)
 }
 
@@ -162,6 +165,51 @@ func (s *FileService) GetFileInfo(path string) (*FileInfo, error) {
 		Path:     path,
 		Size:     info.Size(),
 		MimeType: mimeType,
+	}, nil
+}
+
+// FileMetadata 包含文件的基本元数据
+type FileMetadata struct {
+	FileType string
+	FileName string
+	FileSize int64
+	FilePath string // 可选，如果调用者需要
+}
+
+// GetFileMetadata 根据 senderID 和 fileID 获取文件的元数据
+func (s *FileService) GetFileMetadata(senderID uint, fileID string) (*FileMetadata, error) {
+	filePath, err := s.GetFilePath(senderID, fileID)
+	if err != nil {
+		// 包装错误，提供更多上下文
+		return nil, fmt.Errorf("failed to get file path for fileID %s: %w", fileID, err)
+	}
+
+	fileInfo, err := s.GetFileInfo(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info for path %s: %w", filePath, err)
+	}
+
+	// 确定文件类型分类
+	fileType := "document" // 默认
+	extension := strings.ToLower(filepath.Ext(fileInfo.Name))
+	switch extension {
+	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
+		fileType = "image"
+	case ".mp3", ".wav", ".ogg", ".flac", ".aac":
+		fileType = "audio"
+	case ".mp4", ".avi", ".mov", ".wmv", ".mkv", ".webm":
+		fileType = "video"
+	case ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx":
+		fileType = "document"
+	case ".zip", ".rar", ".7z", ".tar", ".gz":
+		fileType = "archive"
+	}
+
+	return &FileMetadata{
+		FileType: fileType,
+		FileName: fileInfo.Name,
+		FileSize: fileInfo.Size,
+		FilePath: filePath, // 如果需要，可以返回路径
 	}, nil
 }
 

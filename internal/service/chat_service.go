@@ -8,8 +8,6 @@ import (
 	internalProto "go-chat-room/internal/proto"
 	"go-chat-room/internal/repository"
 	"go-chat-room/pkg/logger"
-	"path/filepath"
-	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -23,6 +21,7 @@ type ChatService struct {
 	userRepo        *repository.UserRepository
 	groupRepo       *repository.GroupRepository
 	groupMemberRepo *repository.GroupMemberRepository
+	fileService     *FileService
 }
 
 func NewChatService(
@@ -31,6 +30,7 @@ func NewChatService(
 	userRepo *repository.UserRepository,
 	groupRepo *repository.GroupRepository,
 	groupMemberRepo *repository.GroupMemberRepository,
+	fileService *FileService,
 ) *ChatService {
 	return &ChatService{
 		hub:             hub,
@@ -38,6 +38,7 @@ func NewChatService(
 		userRepo:        userRepo,
 		groupRepo:       groupRepo,
 		groupMemberRepo: groupMemberRepo,
+		fileService:     fileService,
 	}
 }
 
@@ -56,6 +57,7 @@ type FileMessageRequest struct {
 	FileType   string `json:"file_type"`                  // 文件类型："image"、"document"等
 	FileName   string `json:"file_name"`                  // 原始文件名
 	FileSize   int64  `json:"file_size"`                  // 文件大小（字节）
+	FilePath   string `json:"file_path"`                  // 文件路径
 }
 
 func (s *ChatService) HandleMessage(message []byte, senderID uint) {
@@ -103,6 +105,29 @@ func (s *ChatService) SendFileMessage(senderID uint, req FileMessageRequest) err
 		sender = &model.User{Username: "Unknown", Avatar: "default.png"} // 占位符
 	}
 
+	if req.FileID != "" && (req.FileType == "" || req.FileName == "" || req.FileSize == 0) {
+		logger.L.Debug("SendFileMessage: Missing file metadata, fetching...", zap.String("fileID", req.FileID))
+		metadata, err := s.fileService.GetFileMetadata(senderID, req.FileID)
+		if err != nil {
+			logger.L.Error("SendFileMessage: Failed to fetch file metadata", zap.String("fileID", req.FileID), zap.Error(err))
+			// 根据错误类型决定如何处理，可能文件不存在或无权限
+			return fmt.Errorf("failed to get file metadata: %w", err)
+		}
+		req.FileType = metadata.FileType
+		req.FileName = metadata.FileName
+		req.FileSize = metadata.FileSize
+		req.FilePath = metadata.FilePath
+		logger.L.Info("SendFileMessage: Successfully fetched file metadata", zap.Any("metadata", metadata))
+	}
+
+	// 验证 FileID 和元数据是否有效
+	if req.FileID == "" {
+		return errors.New("file_id is required")
+	}
+	if req.FileType == "" || req.FileName == "" {
+		return errors.New("file metadata (type/name) is missing or could not be determined")
+	}
+
 	var dbMessage *model.Message
 	var targetUserIDs []uint
 
@@ -134,8 +159,9 @@ func (s *ChatService) SendFileMessage(senderID uint, req FileMessageRequest) err
 			ReceiverID: 0,
 			FileType:   req.FileType,
 			FileName:   req.FileName,
-			FilePath:   req.FileID, // 在FilePath字段中存储fileID
+			FileID:     req.FileID,
 			FileSize:   req.FileSize,
+			FilePath:   req.FilePath,
 		}
 	} else if req.ReceiverID > 0 {
 		// 私聊消息
@@ -156,8 +182,9 @@ func (s *ChatService) SendFileMessage(senderID uint, req FileMessageRequest) err
 			GroupID:    0,
 			FileType:   req.FileType,
 			FileName:   req.FileName,
-			FilePath:   req.FileID, // 在FilePath字段中存储fileID
+			FileID:     req.FileID,
 			FileSize:   req.FileSize,
+			FilePath:   req.FilePath,
 		}
 	} else {
 		return errors.New("message must have either a valid group_id or receiver_id")
@@ -257,45 +284,13 @@ func (s *ChatService) HandleFileMessage(message []byte, senderID uint) {
 	}
 
 	// 从文件服务获取文件信息
-	fileService, err := NewFileService()
+	metadata, err := s.fileService.GetFileMetadata(senderID, clientMsg.FileId)
 	if err != nil {
-		logger.L.Error("HandleFileMessage: Failed to create file service", zap.Error(err))
-		return
-	}
-
-	// 获取发送者文件路径
-	filePath, err := fileService.GetFilePath(senderID, clientMsg.FileId)
-	if err != nil {
-		logger.L.Error("HandleFileMessage: Failed to get file path",
+		logger.L.Error("HandleFileMessage: Failed to get file metadata",
 			zap.String("fileID", clientMsg.FileId),
 			zap.Uint("senderID", senderID),
 			zap.Error(err))
 		return
-	}
-
-	// 获取文件详细信息
-	fileInfo, err := fileService.GetFileInfo(filePath)
-	if err != nil {
-		logger.L.Error("HandleFileMessage: Failed to get file info",
-			zap.String("filePath", filePath),
-			zap.Error(err))
-		return
-	}
-
-	// 确定文件类型分类
-	fileType := "document" // 默认
-	extension := strings.ToLower(filepath.Ext(fileInfo.Name))
-	switch extension {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp":
-		fileType = "image"
-	case ".mp3", ".wav", ".ogg", ".flac", ".aac":
-		fileType = "audio"
-	case ".mp4", ".avi", ".mov", ".wmv", ".mkv", ".webm":
-		fileType = "video"
-	case ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx":
-		fileType = "document"
-	case ".zip", ".rar", ".7z", ".tar", ".gz":
-		fileType = "archive"
 	}
 
 	// 创建并发送文件消息
@@ -304,9 +299,9 @@ func (s *ChatService) HandleFileMessage(message []byte, senderID uint) {
 		ReceiverID: uint(clientMsg.ReceiverId),
 		GroupID:    uint(clientMsg.GroupId),
 		FileID:     clientMsg.FileId,
-		FileType:   fileType,
-		FileName:   fileInfo.Name,
-		FileSize:   fileInfo.Size,
+		FileType:   metadata.FileType,
+		FileName:   metadata.FileName,
+		FileSize:   metadata.FileSize,
 	}
 
 	if err := s.SendFileMessage(senderID, req); err != nil {
@@ -314,9 +309,9 @@ func (s *ChatService) HandleFileMessage(message []byte, senderID uint) {
 	} else {
 		logger.L.Info("File message sent successfully",
 			zap.String("fileID", clientMsg.FileId),
-			zap.String("fileName", fileInfo.Name),
-			zap.String("fileType", fileType),
-			zap.Int64("fileSize", fileInfo.Size))
+			zap.String("fileName", metadata.FileName),
+			zap.String("fileType", metadata.FileType),
+			zap.Int64("fileSize", metadata.FileSize))
 	}
 }
 
@@ -377,7 +372,7 @@ func (s *ChatService) sendOfflinePrivateMessages(userID uint) {
 
 			FileType: msg.FileType,
 			FileName: msg.FileName,
-			FileUrl:  fmt.Sprintf("/api/files/%s", msg.FilePath), // 文件ID存在FilePath字段中
+			FileUrl:  fmt.Sprintf("/api/files/%s", msg.FileID),
 			FileSize: msg.FileSize,
 			// TODO:
 			// IsOffline:      true, // Indicate this was an offline message
@@ -501,7 +496,7 @@ func (s *ChatService) sendOfflineGroupMessages(userID uint) {
 
 					FileType: msg.FileType,
 					FileName: msg.FileName,
-					FileUrl:  fmt.Sprintf("/api/files/%s", msg.FilePath), // 文件ID存在FilePath字段中
+					FileUrl:  fmt.Sprintf("/api/files/%s", msg.FileID),
 					FileSize: msg.FileSize,
 				}
 

@@ -153,7 +153,11 @@ func setupTestDependencies(t *testing.T) (interfaces.ConnectionManager, *service
 
 	hub := NewHub(nil)
 
-	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo)
+	fileServer, err := service.NewFileService()
+	if err != nil {
+		logger.L.Fatal("Failed to initialize file service", zap.Error(err))
+	}
+	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo, fileServer)
 
 	hub.SetEventHandler(chatService)
 
