@@ -30,6 +30,7 @@ func InitDB() error {
 		&model.Message{},
 		&model.Group{},
 		&model.GroupMember{},
+		&model.FileShare{},
 	)
 	if err != nil {
 		logger.L.Error("failed to migrate database", zap.Error(err))

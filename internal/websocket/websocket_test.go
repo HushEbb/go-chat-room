@@ -150,10 +150,11 @@ func setupTestDependencies(t *testing.T) (interfaces.ConnectionManager, *service
 	userRepo := repository.NewUserRepository()
 	groupRepo := repository.NewGroupRepository()
 	groupMemberRepo := repository.NewGroupMemberRepository()
+	fileShareRepo := repository.NewFileShareRepository()
 
 	hub := NewHub(nil)
 
-	fileServer, err := service.NewFileService()
+	fileServer, err := service.NewFileService(fileShareRepo)
 	if err != nil {
 		logger.L.Fatal("Failed to initialize file service", zap.Error(err))
 	}

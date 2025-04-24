@@ -39,17 +39,25 @@ func main() {
 	messageRepo := repository.NewMessageRepository()
 	groupRepo := repository.NewGroupRepository()
 	groupMemberRepo := repository.NewGroupMemberRepository()
+	fileShareRepo := repository.NewFileShareRepository()
 
 	// 初始化 Websocket hub
 	hub := websocket.NewHub(nil)
 
 	// 创建服务
 	authService := service.NewAuthService(userRepo)
-	fileService, err := service.NewFileService()
+	fileService, err := service.NewFileService(fileShareRepo)
 	if err != nil {
 		logger.L.Fatal("Failed to initialize file service", zap.Error(err))
 	}
 	chatService := service.NewChatService(hub, messageRepo, userRepo, groupRepo, groupMemberRepo, fileService)
+	fileShareService := service.NewFileShareService(
+		fileService,
+		fileShareRepo,
+		userRepo,
+		groupMemberRepo,
+		groupRepo,
+	)
 
 	hub.SetEventHandler(chatService)
 
@@ -61,6 +69,7 @@ func main() {
 	chatHandler := api.NewChatHandler(chatService)
 	groupHandler := api.NewGroupHandler(chatService)
 	fileHandler := api.NewFileHandler(fileService, chatService)
+	fileShareHandler := api.NewFileShareHandler(fileShareService)
 
 	// --- Gin Router Setup ---
 	gin.SetMode(config.GlobalConfig.Server.GinMode)
@@ -117,6 +126,11 @@ func main() {
 		{
 			fileRoutes.POST("/upload", fileHandler.UploadFile)
 			fileRoutes.GET("/:file_id", fileHandler.DownloadFile)
+
+			fileRoutes.POST("/share", fileShareHandler.ShareFile)
+			fileRoutes.POST("/unshare", fileShareHandler.CancelFileShare)
+			fileRoutes.GET("/shared-by-me", fileShareHandler.GetMySharedFiles)
+			fileRoutes.GET("/shared-with-me", fileShareHandler.GetFilesSharedWithMe)
 		}
 
 		// 添加文件消息API

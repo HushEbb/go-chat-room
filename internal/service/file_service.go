@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go-chat-room/internal/repository"
 	"go-chat-room/pkg/config"
 	"go-chat-room/pkg/logger"
 
@@ -18,7 +19,8 @@ import (
 
 // FileService 管理文件操作
 type FileService struct {
-	basePath string
+	basePath      string
+	fileShareRepo *repository.FileShareRepository
 }
 
 // FileInfo 包含文件的元数据
@@ -31,7 +33,7 @@ type FileInfo struct {
 }
 
 // NewFileService 创建新的文件服务
-func NewFileService() (*FileService, error) {
+func NewFileService(fileShareRepo *repository.FileShareRepository) (*FileService, error) {
 	// 从配置中获取存储路径，或使用默认值
 	basePath := "uploads"
 	if config.GlobalConfig.File != nil && config.GlobalConfig.File.StoragePath != "" {
@@ -43,7 +45,7 @@ func NewFileService() (*FileService, error) {
 		return nil, fmt.Errorf("failed to create storage directory: %w", err)
 	}
 
-	return &FileService{basePath: basePath}, nil
+	return &FileService{basePath: basePath, fileShareRepo: fileShareRepo}, nil
 }
 
 // StoreFile 保存上传的文件并返回元数据
@@ -113,25 +115,78 @@ func (s *FileService) StoreFile(file *multipart.FileHeader, userID uint) (*FileI
 
 // GetFilePath 返回存储的文件路径
 func (s *FileService) GetFilePath(userID uint, fileID string) (string, error) {
+	// 先尝试在用户自己的目录中查找
 	userPath := filepath.Join(s.basePath, fmt.Sprintf("user_%d", userID))
-
 	// 列出用户目录中的文件
-	entries, err := os.ReadDir(userPath)
-	if err != nil {
-		logger.L.Error("failed to read user directory",
-			zap.Uint("userID", userID), zap.String("fileID", fileID), zap.Error(err))
-		return "", fmt.Errorf("failed to read user directory: %w", err)
-	}
-
-	// 查找包含fileID的文件名
-	for _, entry := range entries {
-		if strings.Contains(entry.Name(), fileID) {
-			return filepath.Join(userPath, entry.Name()), nil
+	if entries, err := os.ReadDir(userPath); err == nil {
+		for _, entry := range entries {
+			if strings.Contains(entry.Name(), fileID) {
+				return filepath.Join(userPath, entry.Name()), nil
+			}
 		}
 	}
 
-	logger.L.Error("file not found", zap.Uint("userID", userID), zap.String("fileID", fileID), zap.Error(err))
-	return "", fmt.Errorf("file not found: %s", fileID)
+	// 标记是否找到过期的私聊分享
+	foundExpiredDirectShare := false
+
+	// 查找是否有人分享了此文件给当前用户
+	fileShare, err := s.fileShareRepo.FindShare(fileID, userID)
+	if err != nil {
+		return "", fmt.Errorf("error checking file shares: %w", err)
+	}
+
+	if fileShare != nil {
+		// 检查是否过期
+		if fileShare.ExpiresAt != nil && time.Now().After(*fileShare.ExpiresAt) {
+			foundExpiredDirectShare = true
+		} else {
+			// 找到分享记录，现在去文件所有者的目录查找
+			ownerPath := filepath.Join(s.basePath, fmt.Sprintf("user_%d", fileShare.OwnerID))
+			entries, err := os.ReadDir(ownerPath)
+			if err != nil {
+				return "", fmt.Errorf("failed to read owner directory: %w", err)
+			}
+
+			for _, entry := range entries {
+				if strings.Contains(entry.Name(), fileID) {
+					return filepath.Join(ownerPath, entry.Name()), nil
+				}
+			}
+		}
+	}
+
+	// 检查用户是否在群组中，群组中是否有此文件的分享
+	groupShares, err := s.fileShareRepo.FindGroupShares(fileID, userID)
+	if err != nil {
+		return "", fmt.Errorf("error checking group file shares: %w", err)
+	}
+
+	for _, share := range groupShares {
+		// 检查是否过期
+		if share.ExpiresAt != nil && time.Now().After(*share.ExpiresAt) {
+			continue
+		}
+
+		// 在文件所有者目录中查找
+		ownerPath := filepath.Join(s.basePath, fmt.Sprintf("user_%d", share.OwnerID))
+		entries, err := os.ReadDir(ownerPath)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if strings.Contains(entry.Name(), fileID) {
+				return filepath.Join(ownerPath, entry.Name()), nil
+			}
+		}
+	}
+
+    // 根据情况返回不同的错误信息
+    if foundExpiredDirectShare {
+        return "", fmt.Errorf("file was shared directly but has expired, and no valid group shares found: %s", fileID)
+    }
+
+	return "", fmt.Errorf("file not found or not shared: %s", fileID)
 }
 
 // GetFileInfo 返回文件信息
