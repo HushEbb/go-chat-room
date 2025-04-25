@@ -16,6 +16,7 @@ type Config struct {
 	WebSocket WebSocketConfig `mapstructure:"websocket"`
 	Server    ServerConfig    `mapstructure:"server"`
 	File      *FileConfig     `mapstructure:"file"`
+	Messaging MessagingConfig `mapstructure:"messaging"`
 }
 
 type LogConfig struct {
@@ -50,6 +51,20 @@ type WebSocketConfig struct {
 type FileConfig struct {
 	StoragePath string `mapstructure:"storage_path"`  // 文件存储路径
 	MaxFileSize int64  `mapstructure:"max_file_size"` // 最大文件大小（字节）
+}
+
+// KafkaConfig 配置 Kafka 连接
+type KafkaConfig struct {
+	Brokers         []string `mapstructure:"brokers"`
+	TopicPrefix     string   `mapstructure:"topic_prefix"`
+	ConsumerGroup   string   `mapstructure:"consumer_group"`
+	MaxMessageBytes int      `mapstructure:"max_message_bytes"`
+}
+
+// MessagingConfig 配置消息传输方式
+type MessagingConfig struct {
+	Provider string      `mapstructure:"provider"` // "channel" 或 "kafka"
+	Kafka    KafkaConfig `mapstructure:"kafka"`
 }
 
 var GlobalConfig Config

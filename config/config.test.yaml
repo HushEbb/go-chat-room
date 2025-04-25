@@ -5,6 +5,16 @@ log:
 database:
   dsn: "root:password@tcp(127.0.0.1:3306)/chatroom_test?charset=utf8mb4&parseTime=True&loc=Local"
 
+# 消息传输配置
+messaging:
+  provider: "channel"  # "channel" 或 "kafka"
+  kafka:
+    brokers: ["localhost:9092"]
+    topic_prefix: "chat_room"
+    consumer_group: "chat_room_group"
+    # 单个消息最大大小 (默认1MB)
+    max_message_bytes: 1048576
+
 jwt:
   secret: "test-secret-key"
   expiration: 24h  # 支持时间单位：h(小时)、m(分钟)、s(秒)

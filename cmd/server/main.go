@@ -42,7 +42,15 @@ func main() {
 	fileShareRepo := repository.NewFileShareRepository()
 
 	// 初始化 Websocket hub
-	hub := websocket.NewHub(nil)
+	hub, err := websocket.CreateHub(nil)
+	if err != nil {
+		logger.L.Fatal("Failed to create hub", zap.Error(err))
+	}
+
+	// 如果是Kafka实现，确保正确关闭
+	if kafkaHub, ok := hub.(*websocket.KafkaHub); ok {
+		defer kafkaHub.Close()
+	}
 
 	// 创建服务
 	authService := service.NewAuthService(userRepo)
@@ -59,9 +67,13 @@ func main() {
 		groupRepo,
 	)
 
+	// 先设置事件处理器，再启动Hub
 	hub.SetEventHandler(chatService)
 
-	go hub.Run()
+	// 启动Hub
+	if err := websocket.StartHub(hub); err != nil {
+		logger.L.Fatal("Failed to start hub", zap.Error(err))
+	}
 
 	// 注册API路由
 	authHandler := api.NewAuthHandler(authService)
