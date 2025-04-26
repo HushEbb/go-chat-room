@@ -10,6 +10,8 @@ import (
 	"go-chat-room/pkg/db"
 	"go-chat-room/pkg/logger"
 	"log"
+	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -152,7 +154,60 @@ func main() {
 	// 启动服务器
 	serverAddr := config.GlobalConfig.Server.Address
 	logger.L.Info("Starting server", zap.String("address", serverAddr))
-	if err := r.Run(serverAddr); err != nil {
-		logger.L.Fatal("Failed to start server", zap.Error(err))
+
+	if config.GlobalConfig.Server.TLS != nil && config.GlobalConfig.Server.TLS.Enabled {
+		// 添加HTTP重定向到HTTPS
+		go func() {
+			httpAddr := ":8080" // 可以设置为不同端口
+			if serverAddr == ":443" {
+				httpAddr = ":80" // 标准HTTP端口
+			}
+
+			redirectHandler := gin.New()
+			redirectHandler.Use(func(c *gin.Context) {
+				host := c.Request.Host
+				// 提取主机名，去除可能的端口号
+				if colonPos := strings.IndexByte(host, ':'); colonPos != -1 {
+					host = host[:colonPos]
+				}
+
+				// 提取HTTPS端口 (如果不是443标准端口)
+				httpsPort := "443"
+				if serverAddr != ":443" {
+					httpsPort = strings.TrimPrefix(serverAddr, ":")
+				}
+
+				// 如果是非标准端口，添加到URL中
+				var httpsURL string
+				if httpsPort == "443" {
+					httpsURL = "https://" + host + c.Request.RequestURI
+				} else {
+					httpsURL = "https://" + host + ":" + httpsPort + c.Request.RequestURI
+				}
+
+				c.Redirect(http.StatusPermanentRedirect, httpsURL)
+			})
+
+			logger.L.Info("Starting HTTP redirect server", zap.String("address", httpAddr))
+			if err := redirectHandler.Run(httpAddr); err != nil {
+				logger.L.Error("Failed to start HTTP redirect server", zap.Error(err))
+			}
+		}()
+
+		certFile := config.GlobalConfig.Server.TLS.CertFile
+		keyFile := config.GlobalConfig.Server.TLS.KeyFile
+		logger.L.Info("Starting HTTPS server",
+			zap.String("address", serverAddr),
+			zap.String("certFile", certFile),
+			zap.String("keyFile", keyFile))
+
+		if err := r.RunTLS(serverAddr, certFile, keyFile); err != nil {
+			logger.L.Fatal("Failed to start HTTPS server", zap.Error(err))
+		}
+	} else {
+		if err := r.Run(serverAddr); err != nil {
+			logger.L.Fatal("Failed to start HTTP server", zap.Error(err))
+		}
 	}
+
 }

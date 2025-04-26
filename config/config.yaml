@@ -25,8 +25,12 @@ websocket:
   message_retry_interval_ms: 100 # 重试间隔（毫秒）
 
 server:                 # Add this section
-  address: ":8080"      # Address and port to listen on
+  address: ":8443"      # Address and port to listen on
   gin_mode: "debug"     # Gin mode: debug, release, test
+  tls:
+    enabled: true
+    cert_file: "certs/cert.pem"
+    key_file: "certs/key.pem"
 
 file:
   storage_path: "uploads"  # 文件存储目录

@@ -29,8 +29,15 @@ type DatabaseConfig struct {
 }
 
 type ServerConfig struct {
-	Address string `mapstructure:"address"`
-	GinMode string `mapstructure:"gin_mode"`
+	Address string     `mapstructure:"address"`
+	GinMode string     `mapstructure:"gin_mode"`
+	TLS     *TLSConfig `mapstructure:"tls"`
+}
+
+type TLSConfig struct {
+	Enabled  bool   `mapstructure:"enabled"`
+	CertFile string `mapstructure:"cert_file"`
+	KeyFile  string `mapstructure:"key_file"`
 }
 
 type JWTConfig struct {
